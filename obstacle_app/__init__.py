@@ -1,0 +1,1 @@
+"""Local obstacle-bag editor."""

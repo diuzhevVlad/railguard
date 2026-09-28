@@ -5,3 +5,8 @@ README.md
 **/__pycache__
 **/*.pyc
 *.rrd
+data/
+outputs/
+.venv/
+*.zst
+*.log

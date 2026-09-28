@@ -1,0 +1,42 @@
+<?xml version='1.0' encoding='utf-8'?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset>
+    <created>2026-09-26T00:00:00Z</created>
+    <modified>2026-09-26T00:00:00Z</modified>
+    <unit name="meter" meter="1" />
+    <up_axis>Z_UP</up_axis>
+  </asset>
+  <library_geometries>
+    <geometry id="box" name="box_long_thin">
+      <mesh>
+        <source id="positions">
+          <float_array id="positions-array" count="24">-1 -0.1 0 1 -0.1 0 1 0.1 0 -1 0.1 0 -1 -0.1 0.2 1 -0.1 0.2 1 0.1 0.2 -1 0.1 0.2</float_array>
+          <technique_common>
+            <accessor source="#positions-array" count="8" stride="3">
+              <param name="X" type="float" />
+              <param name="Y" type="float" />
+              <param name="Z" type="float" />
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="vertices">
+          <input semantic="POSITION" source="#positions" />
+        </vertices>
+        <triangles count="12">
+          <input semantic="VERTEX" source="#vertices" offset="0" />
+          <p>0 2 1 0 3 2 4 5 6 4 6 7 0 1 5 0 5 4 1 2 6 1 6 5 2 3 7 2 7 6 3 0 4 3 4 7</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene" name="Scene">
+      <node id="box_long_thin" name="box_long_thin">
+        <instance_geometry url="#box" />
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+  <scene>
+    <instance_visual_scene url="#Scene" />
+  </scene>
+</COLLADA>

@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="person_standing">
+    <static>true</static>
+    <link name="body">
+      <visual name="person_visual">
+        <geometry><mesh><uri>model://person_standing/meshes/person.dae</uri></mesh></geometry>
+        <material><ambient>0.25 0.45 0.65 1</ambient><diffuse>0.25 0.45 0.65 1</diffuse></material>
+      </visual>
+      <collision name="person_collision">
+        <geometry><mesh><uri>model://person_standing/meshes/person.dae</uri></mesh></geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

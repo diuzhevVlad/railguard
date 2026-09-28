@@ -8,9 +8,29 @@ carries rosbag2 and RViz2.
 
 ![Predicted centerline on the doubleT_obstacle recording](docs/doubleT_obstacle_pipeline.png)
 
+## Web app
+
+The browser app supports bag playback, per-scan obstacle detection, merged-map
+placement, and exporting bags with simulated obstacles. It reads bag files
+directly; ROS and `ros2 bag play` are only needed for the separate node/RViz workflow below.
+
+From this repository root, put checkpoints in `weights/` as described below,
+put extracted bags under `data/`, then run:
+
+```sh
+mkdir -p data outputs
+docker compose up -d --build web
+```
+
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Bags and weights are mounted read-only; exports and
+map caches are saved in `outputs/`. GPU support uses the NVIDIA container toolkit.
+See the [web-app guide](docs/web-app.md) and [Rerun tools](docs/rerun.md).
+Both the web app and ROS node share the same `railpath/` model and
+`railpath/obstacle_filter.py` implementation.
+
 ## Build
 
-The weights are not in the repository <!-- download link to be added -->. Put them under `weights/` first (they are
+The weights are not in the repository . Put them under `weights/` first (they are
 the training outputs `results/path/best.pt` and `results/refine/{last.pt,calib.json}` of the training repository):
 
 ```
@@ -30,21 +50,67 @@ Requirements on the host: Docker with the NVIDIA container toolkit, an NVIDIA dr
 
 ## Run
 
-Start the container once (GPU, host network, the bags mounted at `/bags`, the host's X server for RViz2):
+Run the following commands from this repository's root (`railguard/`). Put each extracted ROS 2 bag directory
+inside `data/`, keeping `metadata.yaml` together with all its `.db3` (or `.mcap`) files:
+
+```text
+railguard/
+  data/
+    cloud_with_fake_obj/
+      metadata.yaml
+      <recording>.db3
+    roundT_doubleT/
+      metadata.yaml
+      <recording>.db3
+```
+
+Create the directory with `mkdir -p data`, then copy or extract your bags there. Do not put the compressed `.zst`
+archive alone in this directory: extract it first. `data/` is excluded from Git and Docker builds; bags are mounted
+read-only at runtime, not copied into the image.
+
+Start the container once (GPU, host network, `./data` mounted at `/bags`, the host's X server for RViz2):
 
 ```sh
 xhost +local:root                                   # allow the container to open windows (once per login)
 docker run -it --rm --name railguard --gpus all --net host --ipc host \
-    -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v /absolute/path/to/bags:/bags:ro railguard
+    -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+    --mount type=bind,src="$PWD/data",dst=/bags,readonly railguard
 ```
 
-Then, in that shell and in further shells opened with `docker exec -it railguard bash`:
+The bind mount requires `data/` to exist. Check it with `ls /bags/cloud_with_fake_obj` inside the container.
+If an existing container was started with a different mount, exit it and recreate it with the command above;
+`docker exec` cannot change an existing container's mounts.
+
+In the container's first terminal, start the node and wait for `listening on /lidar_points`:
 
 ```sh
-ros2 launch railguard railguard.launch.py                        # node; wait for "listening on /lidar_points"
-rviz2 -d /opt/railguard/ws/install/railguard/share/railguard/rviz/railguard.rviz
-ros2 bag play /bags/roundT_doubleT
+ros2 launch railguard railguard.launch.py
 ```
+
+Open a second terminal with `docker exec -it railguard bash`, then start RViz:
+
+```sh
+rviz2 -d /opt/railguard/ws/install/railguard/share/railguard/rviz/railguard.rviz
+```
+
+Open a third terminal with `docker exec -it railguard bash`, then play the example bag:
+
+```sh
+ros2 bag info /bags/cloud_with_fake_obj
+ros2 bag play /bags/cloud_with_fake_obj
+# Optional: slower playback for visual inspection
+# ros2 bag play /bags/cloud_with_fake_obj --rate 0.5
+```
+
+For this bag, RViz's fixed frame is `hesai_lidar` and the input topic is `/lidar_points`. You should see the gray
+LiDAR scan, red segmented rails, green predicted centerline, and orange filtered obstacle points. Replace
+`cloud_with_fake_obj` with another directory name to play another bag, for example `/bags/roundT_doubleT`.
+This recording has no `/tf` topic, so RViz can show a global **No tf data** warning even while these displays work:
+their messages already use the fixed frame `hesai_lidar`. A different-frame transform error on an individual display
+should instead be fixed by choosing the correct fixed frame or supplying the actual sensor transform.
+
+The playback and obstacle overlay were checked on this recording; see the
+[RViz screenshot and validation notes](docs/cloud_with_fake_obj_validation.md).
 
 For another input topic edit `input_topic` in the config (or pass your own file with `config:=/path/railguard.yaml`);
 in RViz2 set *Fixed Frame* to the cloud's frame (`hesai_lidar` in the layout, `lidar_livox` for doubleT_obstacle) and the
@@ -56,11 +122,14 @@ between the container's root user and a host user carries no data).
 
 ## Topics
 
-| topic | type | content |
-| --- | --- | --- |
-| `input_topic` (config) | `sensor_msgs/PointCloud2` | Pandar128 scan with x, y, z, intensity, ring (ring optional) |
-| `/railguard/centerline` | `nav_msgs/Path` | track centre at 1 m steps up to 200 m ahead, in the frame and stamp of the input cloud |
-| `/railguard/rails` | `sensor_msgs/PointCloud2` | points segmented as rail |
+| topic                            | type                        | content                                                                                   |
+| -------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| `input_topic` (config)         | `sensor_msgs/PointCloud2` | Pandar128 scan with x, y, z, intensity, ring (ring optional)                              |
+| `/railguard/centerline`        | `nav_msgs/Path`           | track centre at 1 m steps up to 200 m ahead, in the frame and stamp of the input cloud    |
+| `/railguard/rails`             | `sensor_msgs/PointCloud2` | points segmented as rail                                                                  |
+| `/railguard/obstacles`         | `sensor_msgs/PointCloud2` | filtered obstacle XYZ; input cloud's frame and stamp; empty when none remain              |
+| `/railguard/obstacle_detected` | `std_msgs/Bool`           | whether any obstacle points remain in this scan                                           |
+| `/railguard/obstacle_distance` | `std_msgs/Float32`        | nearest retained point's distance along the predicted track, metres; NaN when none remain |
 
 The subscription has depth 1, so only the newest scan waits while one is processed and the node never falls behind.
 
@@ -68,24 +137,30 @@ The subscription has depth 1, so only the newest scan waits while one is process
 
 `railguard/config/railguard.yaml` (installed in the image; pass another file with `config:=`):
 
-| parameter | default | meaning |
-| --- | --- | --- |
-| `input_topic` | `/lidar_points` | input cloud topic |
-| `weights` | `/opt/railguard/weights/path/best.pt` | vote model |
-| `refiner` | `/opt/railguard/weights/refine` | refiner directory (`last.pt`, `calib.json`); empty = no refiner, centerline only as far as the rails are seen |
-| `drop_intensity` | `true` | the model was trained without intensity |
+| parameter          | default                                 | meaning                                                                                                           |
+| ------------------ | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `input_topic`    | `/lidar_points`                       | input cloud topic                                                                                                 |
+| `weights`        | `/opt/railguard/weights/path/best.pt` | vote model                                                                                                        |
+| `refiner`        | `/opt/railguard/weights/refine`       | refiner directory (`last.pt`, `calib.json`); empty = no refiner, centerline only as far as the rails are seen |
+| `drop_intensity` | `true`                                | the model was trained without intensity                                                                           |
 
 ## Repository layout
 
 ```
 Dockerfile, entrypoint.sh, fastdds_udp.xml   image: ROS 2 Humble ros-base + rosbag2 + RViz2, PyTorch 2.5.1 / CUDA 12.1
 railguard/                                   ROS 2 package: node, launch, config, RViz layout
-railpath/                                    the model: range image, vote network, clothoid decode, refiner (inference only)
+railpath/                                    model inference, refiner, and shared obstacle filtering
+obstacle_app/                                browser app, bag reader, simulation backends, map editor
+models/                                     obstacle meshes, model descriptions, and previews
+tools/, tests/                              visualization utilities and regression checks
+Dockerfile.web, compose.yaml                 separate web image/service (port 8000)
+requirements-web.txt, requirements-rerun.txt Python dependencies for the web app and viewer utilities
 weights/                                     vote model (path/best.pt) and refiner (refine/last.pt, calib.json); not tracked
+data/, outputs/                             source bags and generated bags/caches; not tracked
 docs/                                        figures used below
 ```
 
-Training, automatic labelling and evaluation code: <https://github.com/diuzhevVlad/RailGuard_rail_det>.
+Training, automatic labelling and evaluation code: [https://github.com/diuzhevVlad/RailGuard_rail_det](https://github.com/diuzhevVlad/RailGuard_rail_det).
 
 ## Architecture
 
@@ -137,17 +212,52 @@ minute of data first.
 
 The obstacle check consumes `/railguard/centerline` and the input cloud: every return inside the train's clearance
 envelope swept along the centerline is an obstacle candidate, and the nearest one gives the distance.
-<!-- module and topics of the obstacle detector to be added by its authors -->
+The node runs `railpath/obstacle_filter.py` immediately after inference, using the same scan and model
+prediction. This is a standalone NumPy/SciPy port of the web app's filtering; it does not import the app, estimate
+odometry, or change the model's rail/centerline outputs. The RViz layout shows retained obstacle points in orange.
+
+Settings in `railguard/config/railguard.yaml` are read at startup (restart the node after editing):
+
+| parameter                         | default   | meaning                                                                  |
+| --------------------------------- | --------- | ------------------------------------------------------------------------ |
+| `train_width_m`                 | `2.1`   | full envelope width, centred on the predicted track                      |
+| `train_height_m`                | `3.0`   | envelope height above the predicted track                                |
+| `min_forward_m`                 | `1.5`   | minimum forward depth checked                                            |
+| `max_forward_m`                 | `150.0` | maximum forward depth checked; set to 200.0 to use the full refined line |
+| `min_height_above_track_m`      | `0.10`  | reject points at or below this height                                    |
+| `near_min_height_above_track_m` | `0.20`  | stricter height threshold inside the near region                         |
+| `near_height_distance_m`        | `10.0`  | extent of the near region (exclusive)                                    |
+| `min_cluster_points`            | `5`     | minimum connected group size                                             |
+
+Coordinates are metres in the LiDAR frame: forward −Y, up +Z. Forward cutoffs use −Y; the reported obstacle distance
+uses arc length along the predicted centerline. The model's curve is interpolated at 0.25 m spacing for envelope
+queries, without extending it past its finite predictions. Segmented rail points are excluded with a 0.00001 m
+numerical matching tolerance. Connections use 3D distance: radius 0.20 m to 30 m, linearly increasing to 0.35 m at
+80 m and 0.60 m at 150 m, then constant. A connection must fit both endpoints' radii. Connected groups of at least
+five points survive; a chain is sufficient. Far decisions retain the baseline 10 cm rule, including at the 10 m
+boundary. The implementation includes bounded neighbor searches, dense-cell shortcuts, and overlapping regional
+passes for large envelopes, as in the app.
+
+Each scan publishes an obstacle cloud and both scalar results, including empty/false/NaN results to clear previous
+detections. False means no retained points, not a guarantee of a clear track (an unsupported centerline also has no
+detections). The scalar topics have no header; use the stamped obstacle cloud when exact synchronization is needed.
+
+```sh
+ros2 topic echo /railguard/obstacle_detected
+ros2 topic echo /railguard/obstacle_distance
+# Pure filtering tests; NumPy and SciPy are sufficient, no ROS/model weights required:
+PYTHONPATH=.:railguard python3 -m unittest discover -s tests -p 'test_ros_obstacle_filter.py'
+```
 
 ## Experiments
 
 Held-out recordings (2,542 scans from three runs never used for training or calibration); lateral error of the centerline
 p50 / p95 in metres; single scan.
 
-| distance | 50 m | 100 m | 150 m | 200 m |
-| --- | --- | --- | --- | --- |
-| all scans | 0.09 / 0.25 | 0.07 / 0.42 | 0.37 / 3.18 | 3.2 / 14.2 |
-| 95 % corridor coverage | 0.99 | 0.96 | 0.88 | 0.72 |
+| distance               | 50 m        | 100 m       | 150 m       | 200 m      |
+| ---------------------- | ----------- | ----------- | ----------- | ---------- |
+| all scans              | 0.09 / 0.25 | 0.07 / 0.42 | 0.37 / 3.18 | 3.2 / 14.2 |
+| 95 % corridor coverage | 0.99        | 0.96        | 0.88        | 0.72       |
 
 Under test-time perturbation of the same scans (100 m p50 / p95): mount jitter 0.10 / 0.41, synthetic obstacles
 0.09 / 0.39, a train-sized occluder 0.20 / 1.91 (before the robustness training: 0.54 / 5.06). Rail segmentation IoU at

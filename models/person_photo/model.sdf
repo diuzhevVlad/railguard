@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="person_photo">
+    <static>true</static>
+    <link name="body">
+      <visual name="person_visual">
+        <geometry><mesh><uri>model://person_photo/meshes/person.dae</uri></mesh></geometry>
+      </visual>
+      <collision name="person_collision">
+        <geometry><mesh><uri>model://person_photo/meshes/person.dae</uri></mesh></geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

@@ -1,0 +1,29 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+RUN pip install --no-cache-dir torch==2.6.0 torchvision==0.21.0 --index-url ${TORCH_INDEX_URL}
+COPY requirements-web.txt /app/
+RUN pip install --no-cache-dir -r requirements-web.txt
+
+COPY railpath /app/railpath
+ENV PYTHONPATH=/app RAILGUARD_DEVICE=auto RAILGUARD_CPU_THREADS=4
+COPY obstacle_app /app/obstacle_app
+COPY models/niva_car/meshes/niva.dae /app/models/niva_car/meshes/niva.dae
+COPY models/person_standing/meshes/person.dae /app/models/person_standing/meshes/person.dae
+COPY models/person_photo/meshes/person.dae /app/models/person_photo/meshes/person.dae
+COPY models/alien_reference/meshes/alien.dae /app/models/alien_reference/meshes/alien.dae
+COPY models/trump_stylized/meshes/trump.dae /app/models/trump_stylized/meshes/trump.dae
+COPY models/box_square/meshes/box.dae /app/models/box_square/meshes/box.dae
+COPY models/box_long_thin/meshes/box.dae /app/models/box_long_thin/meshes/box.dae
+COPY models/wire_hanging/meshes/wire.dae /app/models/wire_hanging/meshes/wire.dae
+
+ENV OBSTACLE_DATA_DIR=/data OBSTACLE_OUTPUT_DIR=/output \
+    OBSTACLE_MODEL_PATH=/app/models/person_standing/meshes/person.dae
+EXPOSE 8000
+CMD ["uvicorn", "obstacle_app.web:app", "--host", "0.0.0.0", "--port", "8000"]

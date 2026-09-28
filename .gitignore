@@ -11,6 +11,7 @@ log/
 
 # local data and outputs
 bags/
+data/
 *.db3
 *.rrd
 *.mcap
@@ -22,3 +23,8 @@ bags/
 
 # model weights are distributed separately (see README)
 weights/
+
+# Web exports and local caches
+outputs/
+.venv/
+*.log

@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="box_square">
+    <static>true</static>
+    <link name="body">
+      <visual name="box_visual">
+        <geometry><mesh><uri>model://box_square/meshes/box.dae</uri></mesh></geometry>
+        <material><ambient>0.6 0.4 0.2 1</ambient><diffuse>0.6 0.4 0.2 1</diffuse></material>
+      </visual>
+      <collision name="box_collision">
+        <geometry><mesh><uri>model://box_square/meshes/box.dae</uri></mesh></geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

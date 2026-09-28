@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="wire_hanging">
+    <static>true</static>
+    <link name="body">
+      <visual name="wire_visual">
+        <geometry><mesh><uri>model://wire_hanging/meshes/wire.dae</uri></mesh></geometry>
+        <material><ambient>0.12 0.14 0.17 1</ambient><diffuse>0.12 0.14 0.17 1</diffuse></material>
+      </visual>
+      <collision name="wire_collision">
+        <geometry><mesh><uri>model://wire_hanging/meshes/wire.dae</uri></mesh></geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

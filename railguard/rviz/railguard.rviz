@@ -34,6 +34,18 @@ Visualization Manager:
       Size (Pixels): 3
       Color Transformer: FlatColor
       Color: 230; 60; 60
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Obstacles
+      Enabled: true
+      Topic:
+        Value: /railguard/obstacles
+        Reliability Policy: Reliable
+        Depth: 1
+      Style: Points
+      Size (Pixels): 5
+      Color Transformer: FlatColor
+      Color: 255; 160; 60
+      Decay Time: 0
     - Class: rviz_default_plugins/Path
       Name: Centerline
       Enabled: true

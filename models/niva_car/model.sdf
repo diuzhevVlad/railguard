@@ -1,0 +1,1 @@
+<?xml version="1.0"?><sdf version="1.7"><model name="niva_car"><static>true</static><link name="body"><visual name="visual"><geometry><mesh><uri>model://niva_car/meshes/niva.dae</uri></mesh></geometry></visual><collision name="collision"><geometry><mesh><uri>model://niva_car/meshes/niva.dae</uri></mesh></geometry></collision></link></model></sdf>
