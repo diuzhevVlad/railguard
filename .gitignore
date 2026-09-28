@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# colcon / ROS 2 workspace
+build/
+install/
+log/
+
+# local data and outputs
+bags/
+*.db3
+*.rrd
+*.mcap
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# model weights are distributed separately (see README)
+weights/

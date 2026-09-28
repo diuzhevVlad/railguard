@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fast DDS profile: UDP transport only. Shared memory between the root user in the container and the user on the host
+     does not work, so without this the host (bag, RViz) and the container would discover each other but exchange no data. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp</transport_id>
+      <type>UDPv4</type>
+      <maxMessageSize>65500</maxMessageSize>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="udp_only" is_default_profile="true">
+    <rtps>
+      <userTransports><transport_id>udp</transport_id></userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

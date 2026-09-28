@@ -1,0 +1,68 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 10
+      Plane Cell Count: 40
+      Color: 80; 80; 80
+    - Class: rviz_default_plugins/PointCloud2
+      Name: LiDAR
+      Enabled: true
+      Topic:
+        Value: /lidar_points
+        Reliability Policy: Best Effort
+        Depth: 5
+      Size (m): 0.03
+      Style: Points
+      Size (Pixels): 1
+      Color Transformer: FlatColor
+      Color: 160; 160; 160
+      Decay Time: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Rails
+      Enabled: true
+      Topic:
+        Value: /railguard/rails
+        Reliability Policy: Reliable
+        Depth: 5
+      Style: Points
+      Size (Pixels): 3
+      Color Transformer: FlatColor
+      Color: 230; 60; 60
+    - Class: rviz_default_plugins/Path
+      Name: Centerline
+      Enabled: true
+      Topic:
+        Value: /railguard/centerline
+        Reliability Policy: Reliable
+        Depth: 5
+      Line Style: Billboards
+      Line Width: 0.15
+      Color: 60; 210; 90
+      Pose Style: None
+  Global Options:
+    Fixed Frame: hesai_lidar
+    Background Color: 20; 20; 20
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 60
+      Focal Point:
+        X: 0
+        Y: -40
+        Z: 0
+      Pitch: 0.5
+      Yaw: 1.57
+    Saved: ~
+Window Geometry:
+  Height: 900
+  Width: 1500

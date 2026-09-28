@@ -1,0 +1,6 @@
+railguard_node:
+  ros__parameters:
+    input_topic: /lidar_points                        # doubleT_obstacle: /sensing/lidar/hesai128/pointcloud
+    weights: /opt/railguard/weights/path/best.pt
+    refiner: /opt/railguard/weights/refine            # "" = no refiner (centerline only as far as the rails are seen)
+    drop_intensity: true                              # the model was trained without intensity

@@ -1,0 +1,7 @@
+.git
+.gitignore
+docs/
+README.md
+**/__pycache__
+**/*.pyc
+*.rrd
