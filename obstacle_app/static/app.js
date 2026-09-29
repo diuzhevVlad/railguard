@@ -1,22 +1,33 @@
 const $ = id => document.getElementById(id);
 const ui = {bag:$('bag'),topic:$('topic'),seek:$('seek'),seekPosition:$('seek-position'),seekEnd:$('seek-end'),notice:$('notice'),status:$('frame-status'),time:$('time-display')};
-let appParameters={initial_speed_m_s:0,train_width_m:2.1,train_height_m:3,max_forward_m:150};
+let detectionParameters={train_width_m:2.1,train_height_m:3,max_forward_m:150};
+let simulationParameters={initial_speed_m_s:0};
 let detectionGeneration=0,resumeAfterDetection=false;
-async function applyParameters({detectionOnly=false}={}){
-  for(const input of $('parameters').querySelectorAll('input'))if((!detectionOnly||input.id!=='initial-speed')&&!input.reportValidity())return;
-  const next={initial_speed_m_s:detectionOnly?appParameters.initial_speed_m_s:Number($('initial-speed').value),train_width_m:Number($('train-width').value),train_height_m:Number($('train-height').value),max_forward_m:Number($('detection-distance').value)};
+async function applyDetectionParameters(){
+  for(const input of $('detection-parameters').querySelectorAll('input'))if(!input.reportValidity())return;
+  const next={train_width_m:Number($('train-width').value),train_height_m:Number($('train-height').value),max_forward_m:Number($('detection-distance').value)};
   if(!Object.values(next).every(Number.isFinite))return;
-  if(Object.keys(next).every(key=>next[key]===appParameters[key]))return;
-  const speedChanged=next.initial_speed_m_s!==appParameters.initial_speed_m_s;
+  if(Object.keys(next).every(key=>next[key]===detectionParameters[key]))return;
   const wasVisible=detectionVisible||(bagReady&&$('detect').disabled),wasPlaying=resumeAfterDetection||Boolean(socket&&!ended&&!paused);
-  appParameters=next;detectionGeneration++;
+  detectionParameters=next;detectionGeneration++;
   stopPlayback();activeDetectionId=null;detectionVisible=false;
   $('detection-legend').hidden=true;$('detection-job').hidden=true;$('detect').disabled=!bagReady;showDetectionButton();
-  if(speedChanged){mapEditor.reset();notice('Initial speed changed. Reopen the merged map to prepare its poses.');}
   if(lastFrame&&lastBasePoints&&!mapEditor.active)renderFrame(lastBasePoints,{...lastFrame,detected_points:0});
-  $('parameter-status').textContent=`Active envelope · ${next.train_width_m} × ${next.train_height_m} m · detection to ${next.max_forward_m} m`;
+  $('detection-parameter-status').textContent=`Active envelope · ${next.train_width_m} × ${next.train_height_m} m · detection to ${next.max_forward_m} m`;
   if(wasVisible&&!mapEditor.active){resumeAfterDetection=wasPlaying;await detect();}
   else if(wasPlaying&&!mapEditor.active)play(false);
+}
+function applySimulationParameters(){
+  if(!$('initial-speed').reportValidity())return false;
+  const speed=Number($('initial-speed').value);
+  if(!Number.isFinite(speed)||speed<0)return false;
+  if(speed!==simulationParameters.initial_speed_m_s){
+    simulationParameters={initial_speed_m_s:speed};
+    mapEditor.reset({clearViewer:mapEditor.active});
+    notice('Simulation speed changed. Reopen the merged map to prepare its poses.');
+  }
+  $('simulation-parameter-status').textContent=`Active initial speed · ${speed} m/s`;
+  return true;
 }
 let models=[],obstacles=[],obstacleSequence=0;
 let socket=null, pendingFrame=null, ended=true, finished=false, paused=false, bagDuration=0, seekMax=0, scrubbing=false, seekTimer=null;
@@ -95,7 +106,8 @@ async function loadBag(){
   try{
     const info=await api('/api/info?bag_id='+encodeURIComponent(bagId));
     if(loadVersion!==bagLoadVersion)return;
-    appParameters.initial_speed_m_s=info.initial_speed_m_s??0;$('initial-speed').value=appParameters.initial_speed_m_s;
+    simulationParameters.initial_speed_m_s=info.initial_speed_m_s??0;$('initial-speed').value=simulationParameters.initial_speed_m_s;
+    $('simulation-parameter-status').textContent=`Active initial speed · ${simulationParameters.initial_speed_m_s} m/s`;
     ui.topic.replaceChildren();
     for(const topic of info.topics.filter(t=>t.type==='sensor_msgs/msg/PointCloud2')){
       const opt=document.createElement('option');opt.value=topic.name;opt.textContent=topic.name;ui.topic.append(opt);
@@ -200,6 +212,7 @@ function commitSeek(){
   },180);
 }
 async function simulate(){
+  if(!applySimulationParameters())return;
   let request;
   if(mapEditor.active){try{request=mapEditor.request();}catch(error){notice(error.message,'error');return;}}else{
   if(bagDuration<=4){notice('Recording must be longer than 4 seconds to add obstacles.','error');return;}
@@ -208,7 +221,7 @@ async function simulate(){
   request={bag_id:ui.bag.value,topic:ui.topic.value,obstacles:obstacles.map(item=>({id:item.id,model_id:item.model_id,encounter_seconds:item.encounter_seconds,lateral_offset_m:item.offset??0,height_above_track_m:item.height_above_track_m}))};
   }
   if(!$('initial-speed').reportValidity())return;
-  request.initial_speed_m_s=appParameters.initial_speed_m_s;
+  request.initial_speed_m_s=simulationParameters.initial_speed_m_s;
   $('simulate').disabled=true;$('job').hidden=false;$('progress-fill').style.width='0%';$('job-text').textContent='Starting export…';
   try{
     const job=await api('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
@@ -263,7 +276,7 @@ async function detect(){
   if(!bagId||!topic)return;
   $('detect').disabled=true;$('detect').textContent='Loading model…';$('detection-job').hidden=false;$('detection-progress-fill').style.width='0%';$('detection-job-text').textContent='Loading RailGuard weights and refiner…';
   try{
-    const job=await api('/api/detections',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bag_id:bagId,topic,...appParameters})});
+    const job=await api('/api/detections',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bag_id:bagId,topic,...detectionParameters})});
     if(generation!==detectionGeneration)return;
     const timer=setInterval(async()=>{
       try{
@@ -276,7 +289,7 @@ async function detect(){
           if(current.state==='done'&&ui.bag.value===bagId&&ui.topic.value===topic){
             activeDetectionId=job.id;
             $('detection-job-text').textContent='RailGuard + refiner ready · checking each displayed scan';
-            notice(`RailGuard ready on ${current.device}. Detection follows the displayed scan; obstacle detection checks 1.5–${appParameters.max_forward_m} m ahead; the full predicted centerline stays visible.`,'success');
+            notice(`RailGuard ready on ${current.device}. Detection follows the displayed scan; obstacle detection checks 1.5–${detectionParameters.max_forward_m} m ahead; the full predicted centerline stays visible.`,'success');
             await setDetectionVisible(true);
             // A fresh page has no frame to decorate. Show one paused preview
             // without changing the position or state of an existing player.
@@ -573,8 +586,9 @@ const modelReady=loadModels().catch(e=>notice('Cannot load obstacle models: '+e.
 const bagsReady=refreshBags().catch(e=>notice(e.message,'error'));
 Promise.all([modelReady,bagsReady]).then(()=>{if(models.length&&!obstacles.length)addObstacle();});
 
-$('apply-parameters').onclick=applyParameters;
+$('apply-detection-parameters').onclick=applyDetectionParameters;
+$('apply-simulation-parameters').onclick=applySimulationParameters;
 for(const id of ['train-width','train-height','detection-distance']){
-  $(id).addEventListener('change',()=>applyParameters({detectionOnly:true}));
+  $(id).addEventListener('change',applyDetectionParameters);
 }
 $('detection-distance').oninput=()=>{$('detection-distance-value').textContent=$('detection-distance').value+' m';};

@@ -199,5 +199,3 @@ def save_mesh(mesh, directory):
            + struct.pack('<II', len(header), 0x4E4F534A) + header
            + struct.pack('<II', len(blob), 0x004E4942) + blob)
     (MODEL / 'meshes/person.glb').write_bytes(glb)
-
-

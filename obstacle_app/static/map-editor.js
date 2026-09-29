@@ -58,11 +58,11 @@ class MapEditor {
     }
     this.updatePicking();this.renderer.requestDraw();
   }
-  reset() {
+  reset({clearViewer=true}={}) {
     this.generation++;this.previewVersion++;clearTimeout(this.previewTimer);
     this.mapId=null;this.points=null;this.geometry=null;this.clearItems();
     $('prepare-map').disabled=false;$('place-map').disabled=true;$('map-job').hidden=true;
-    this.renderer.setPoints(new Float32Array(0));this.renderer.setPrediction(null);
+    if(clearViewer){this.renderer.setPoints(new Float32Array(0));this.renderer.setPrediction(null);}
   }
   clearItems(){
     this.items=[];this.confirming=false;this.selectEntry(null);this.renderer.setFixedMeshes([]);
@@ -119,12 +119,13 @@ class MapEditor {
     this.renderer.canvas.style.cursor=this.placing?'crosshair':'grab';
   }
   async prepare() {
+    if(!applySimulationParameters())return;
     if(!this.active||!ui.bag.value||!ui.topic.value)return;
     const generation=++this.generation,bagId=ui.bag.value,topic=ui.topic.value;
     this.mapId=null;this.points=null;this.clearItems();this.renderer.setPoints(new Float32Array(0));this.renderer.setPrediction(null);
     $('prepare-map').disabled=true;$('place-map').disabled=true;$('map-job').hidden=false;
     try{
-      let job=await api('/api/maps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bag_id:bagId,topic,initial_speed_m_s:appParameters.initial_speed_m_s})});
+      let job=await api('/api/maps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bag_id:bagId,topic,initial_speed_m_s:simulationParameters.initial_speed_m_s})});
       while(generation===this.generation){
         $('map-status').textContent=job.message;$('map-progress').style.width=(job.progress*100)+'%';
         if(job.state==='failed')throw Error(job.message);
