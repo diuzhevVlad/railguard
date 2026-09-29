@@ -1,0 +1,18 @@
+{
+  "seed": 20260928,
+  "schedule": {
+    "first_encounter_s": 5,
+    "interval_s": 15,
+    "end_margin_s": 2
+  },
+  "placement": {
+    "lateral_offset_m": [-1, 1],
+    "height_above_track_m": [0, 0],
+    "yaw_relative_to_track_deg": [-45, 45]
+  },
+  "models": {
+    "person_standing": {"scale": [0.9, 1.1]},
+    "box_square": {"scale": [0.5, 3.0]},
+    "box_long_thin": {"scale": [0.5, 1.5]}
+  }
+}

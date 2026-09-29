@@ -10,11 +10,12 @@ import time
 
 import numpy as np
 from rosbags.highlevel import AnyReader
-from rosbags.rosbag2 import Writer
+from rosbags.rosbag2 import Writer, CompressionMode, CompressionFormat
 from rosbags.typesys import Stores, get_typestore
 from kiss_icp.config import load_config
 from kiss_icp.kiss_icp import KissICP
 
+from .bag_storage import estimate_export_bytes
 from .cloud import append_xyz, filter_points, valid_xyz, xyz_view
 from .core import Progress, Scenario
 from .mesh import load_collada_mesh
@@ -78,9 +79,7 @@ class RayCastingBackend:
             if start_ns >= reader.end_time:
                 raise ValueError("Clip starts after the end of the bag")
             clip_ns = max(1, min(stop_ns, reader.end_time) - start_ns)
-            # Use the source metadata for a conservative preflight estimate.
-            size = sum(p.stat().st_size for p in scenario.source_bag.iterdir() if p.suffix == ".db3")
-            expected = int(size * clip_ns / max(1, reader.duration) * 1.5) + 128 * 1024 * 1024
+            expected = estimate_export_bytes(reader, scenario.source_bag, start_ns, stop_ns, scenario.compression)
             if shutil.disk_usage(output_directory.parent).free < expected:
                 raise OSError(f"Not enough free space for this clip (estimate {expected / 1e9:.1f} GB)")
             progress(0.03, "Loading saved map poses" if bool(world_items) else "Estimating poses and merging rails")
@@ -251,7 +250,10 @@ class RayCastingBackend:
             modified_timestamps = []
             frame_counts = {}
             export_started = time.perf_counter()
-            with Writer(output_directory, version=8) as writer:
+            writer = Writer(output_directory, version=8)
+            if scenario.compression == "zstd":
+                writer.set_compression(CompressionMode.MESSAGE, CompressionFormat.ZSTD)
+            with writer:
                 connections = {c.id: writer.add_connection(
                     c.topic, c.msgtype, typestore=typestore,
                     serialization_format=c.ext.serialization_format,
@@ -323,6 +325,8 @@ class RayCastingBackend:
                     timings["write_s"] += time.perf_counter() - operation_started
                     messages += 1
                     if messages % 10 == 0:
+                        if shutil.disk_usage(output_directory).free < 512*1024**2:
+                            raise OSError("Less than 512 MiB free; export stopped before filling the disk")
                         progress(0.48 + 0.51 * min(1, (bag_ns - start_ns) / clip_ns),
                                  f"Wrote {messages} messages; modified {modified} frames")
                     read_started = time.perf_counter()
@@ -341,6 +345,7 @@ class RayCastingBackend:
                 "from those objects' shadows; other obstacles remained active.")
         (output_directory / "obstacle_scenario.json").write_text(json.dumps({
             "backend": "ray_casting",
+            "compression": scenario.compression,
             "warnings": warnings,
             "near_contact_policy": {"clearance_m": sensor.min_range_m,
                 "reference": "object_mesh_signed_distance", "action": "omit_only_contact_objects"},

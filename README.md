@@ -276,3 +276,9 @@ decode, and the scene unrolled into the curve's frame.
 ## Video
 
 <!-- link to the demonstration video -->
+
+## Synthetic obstacle test dataset
+
+Generate six new bags using the app renderer, with people and varied-size boxes
+at 5, 20, 35, … seconds. See [dataset generation](docs/test-dataset.md) for
+sampling configuration, external-disk output, compression and replay commands.

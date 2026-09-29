@@ -44,6 +44,7 @@ class Scenario:
     world_obstacle: WorldObstacleSpec | None = None
     world_map_directory: Path | None = None
     world_obstacles: tuple[WorldObstacleSpec, ...] = ()
+    compression: str | None = None  # Optional lossless ROS 2 message compression.
 
 
 Progress = Callable[[float, str], None]
