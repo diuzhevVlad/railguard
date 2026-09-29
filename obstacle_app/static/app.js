@@ -285,7 +285,7 @@ async function detect(){
         if(generation!==detectionGeneration){clearInterval(timer);return;}
         $('detection-progress-fill').style.width=Math.round(current.progress*100)+'%';$('detection-job-text').textContent=current.message;
         if(current.state==='done'||current.state==='failed'){
-          clearInterval(timer);$('detect').disabled=false;showDetectionButton();
+          clearInterval(timer);$('detection-job').hidden=true;$('detect').disabled=false;showDetectionButton();
           if(current.state==='done'&&ui.bag.value===bagId&&ui.topic.value===topic){
             activeDetectionId=job.id;
             $('detection-job-text').textContent='RailGuard + refiner ready · checking each displayed scan';
@@ -297,9 +297,9 @@ async function detect(){
             else if(!lastFrame&&(!socket||ended))play(true);
           }else if(current.state==='failed')notice(current.message,'error');
         }
-      }catch(e){clearInterval(timer);$('detect').disabled=false;showDetectionButton();notice(e.message,'error');}
+      }catch(e){clearInterval(timer);$('detection-job').hidden=true;$('detect').disabled=false;showDetectionButton();notice(e.message,'error');}
     },600);
-  }catch(e){$('detect').disabled=false;showDetectionButton();notice(e.message,'error');}
+  }catch(e){$('detection-job').hidden=true;$('detect').disabled=false;showDetectionButton();notice(e.message,'error');}
 }
 
 class CloudRenderer{
@@ -309,7 +309,7 @@ class CloudRenderer{
     const gl=this.gl;
     // With Z up and the default camera looking along -Y, screen-right is -X.
     const vs=`#version 300 es
-      in vec3 aPosition,aColor;in vec2 aUV;out vec3 vColor,vWorld;out vec2 vUV;uniform bool uMesh;uniform vec3 uMeshOffset,uMeshPivot;uniform float uMeshScale,uMeshAngle;uniform float uYaw,uPitch,uDistance,uAspect,uSize;uniform vec3 uTarget;uniform vec2 uPixelOffset;
+      in vec3 aPosition,aColor;in vec2 aUV;out vec3 vColor,vWorld;out vec2 vUV;uniform bool uMesh;uniform vec3 uMeshOffset,uMeshPivot;uniform float uMeshScale,uMeshAngle;uniform float uYaw,uPitch,uDistance,uAspect,uSize,uPixelRatio;uniform vec3 uTarget;uniform vec2 uPixelOffset;
       void main(){
         vColor=aColor;vUV=aUV;vec3 local=(aPosition-uMeshPivot)*uMeshScale;
         float mc=cos(uMeshAngle),ms=sin(uMeshAngle);
@@ -325,7 +325,7 @@ class CloudRenderer{
                 -2.0*farPlane*nearPlane/(farPlane-nearPlane);
         gl_Position=vec4(h*1.35/uAspect,v*1.35,z,depth);
         gl_Position.xy+=uPixelOffset*depth;
-        gl_PointSize=clamp(uSize*22.0/max(nearPlane,depth),1.0,7.0);
+        gl_PointSize=clamp(uSize*22.0/max(nearPlane,depth),1.0,7.0)*uPixelRatio;
       }`;
     const fs=`#version 300 es
       precision highp float;uniform vec4 uColor;uniform bool uMesh,uCardboard;
@@ -359,7 +359,7 @@ class CloudRenderer{
     lines.push(0,0,0,10,0,0,0,0,0,0,-20,0,0,0,0,0,0,5);
     this.gridCount=lines.length/3;gl.bindBuffer(gl.ARRAY_BUFFER,this.grid);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(lines),gl.STATIC_DRAW);
     this.position=gl.getAttribLocation(this.program,'aPosition');
-    this.uniforms=Object.fromEntries(['uPixelOffset','uYaw','uPitch','uDistance','uAspect','uSize','uTarget','uColor','uMesh','uCardboard','uMeshOffset','uMeshPivot','uMeshScale','uMeshAngle'].map(x=>[x,gl.getUniformLocation(this.program,x)]));
+    this.uniforms=Object.fromEntries(['uPixelRatio','uPixelOffset','uYaw','uPitch','uDistance','uAspect','uSize','uTarget','uColor','uMesh','uCardboard','uMeshOffset','uMeshPivot','uMeshScale','uMeshAngle'].map(x=>[x,gl.getUniformLocation(this.program,x)]));
     this.meshColorBuffer=gl.createBuffer();this.meshUVBuffer=gl.createBuffer();this.colorAttribute=gl.getAttribLocation(this.program,'aColor');this.uvAttribute=gl.getAttribLocation(this.program,'aUV');this.meshOffset=[0,0,0];this.meshScale=1;this.meshAngle=0;this.meshPivot=[0,0,0];this.controls=new MeshControls(this);
     this.meshBuffer=gl.createBuffer();this.meshCount=0;this.points=new Float32Array(0);
     let drag=null;
@@ -398,7 +398,7 @@ class CloudRenderer{
     canvas.addEventListener('pointerup',endDrag);canvas.addEventListener('pointercancel',endDrag);
     canvas.addEventListener('wheel',e=>{e.preventDefault();this.distance=Math.max(3,Math.min(this.maxDistance||150,this.distance*Math.exp(e.deltaY*.001)));this.requestDraw();},{passive:false});
     this.installKeyboardNavigation();
-    new ResizeObserver(()=>this.requestDraw()).observe(canvas);this.requestDraw();
+    new ResizeObserver(()=>this.requestDraw()).observe(canvas);window.addEventListener('resize',()=>this.requestDraw());this.requestDraw();
   }
   installKeyboardNavigation(){
     const canvas=this.canvas,keys=new Set();
@@ -528,7 +528,7 @@ class CloudRenderer{
     if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
     gl.viewport(0,0,canvas.width,canvas.height);
     gl.clearColor(.106,.110,.125,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);if(this.mapMode)gl.enable(gl.DEPTH_TEST);else gl.disable(gl.DEPTH_TEST);gl.useProgram(this.program);
-    gl.uniform1f(this.uniforms.uYaw,this.yaw);gl.uniform1f(this.uniforms.uPitch,this.pitch);gl.uniform1f(this.uniforms.uDistance,this.distance);gl.uniform1f(this.uniforms.uAspect,w/h);gl.uniform3fv(this.uniforms.uTarget,this.target);
+    gl.uniform1f(this.uniforms.uPixelRatio,scale);gl.uniform1f(this.uniforms.uYaw,this.yaw);gl.uniform1f(this.uniforms.uPitch,this.pitch);gl.uniform1f(this.uniforms.uDistance,this.distance);gl.uniform1f(this.uniforms.uAspect,w/h);gl.uniform3fv(this.uniforms.uTarget,this.target);
     gl.uniform1i(this.uniforms.uMesh,0);gl.disableVertexAttribArray(this.colorAttribute);gl.disableVertexAttribArray(this.uvAttribute);
     gl.uniform2f(this.uniforms.uPixelOffset,0,0);gl.lineWidth(1);
     gl.enableVertexAttribArray(this.position);
@@ -592,3 +592,16 @@ for(const id of ['train-width','train-height','detection-distance']){
   $(id).addEventListener('change',applyDetectionParameters);
 }
 $('detection-distance').oninput=()=>{$('detection-distance-value').textContent=$('detection-distance').value+' m';};
+
+$('fullscreen').onclick=async()=>{
+  try{
+    if(document.fullscreenElement===$('viewer-panel'))await document.exitFullscreen();
+    else await $('viewer-panel').requestFullscreen();
+  }catch(error){notice('Cannot open fullscreen: '+error.message,'error');}
+};
+document.addEventListener('fullscreenchange',()=>{
+  const active=document.fullscreenElement===$('viewer-panel');
+  $('fullscreen').textContent=active?'Exit fullscreen':'Fullscreen';
+  $('fullscreen').setAttribute('aria-pressed',String(active));
+  renderer.requestDraw();
+});

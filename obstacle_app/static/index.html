@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Obstacle Bag Studio</title>
-  <link rel="stylesheet" href="/style.css?v=stable-viewer-1">
+  <link rel="stylesheet" href="/style.css?v=stable-viewer-2">
 </head>
 <body>
   <header><div class="mark">RG</div><div><h1>Obstacle Bag Studio</h1><p>Inspect a LiDAR recording and add obstacles to it</p></div></header>
@@ -62,11 +62,12 @@
         <div id="job" class="job" hidden><div class="progress"><div id="progress-fill"></div></div><p id="job-text">Preparing…</p></div>
       </section>
     </aside>
-    <section class="viewer-panel">
+    <section class="viewer-panel" id="viewer-panel">
       <div class="viewer-header">
         <div><h2>Point cloud</h2><p id="frame-status">Ready to play</p></div>
         <div class="detect-toolbar">
           <span class="view-label">LiDAR frame · metres</span>
+          <button id="fullscreen" type="button" aria-pressed="false" title="Expand the point-cloud viewer">Fullscreen</button>
           <button id="detect" aria-pressed="false" title="Run RailGuard and its refiner on each displayed scan">Detect obstacles: Off</button>
         </div>
       </div>
@@ -79,7 +80,7 @@
     </section>
   </main>
   <script src="/mesh-controls.js?v=1"></script>
-<script src="/map-editor.js?v=stable-viewer-1"></script>
-  <script src="/app.js?v=stable-viewer-1"></script>
+<script src="/map-editor.js?v=stable-viewer-2"></script>
+  <script src="/app.js?v=stable-viewer-2"></script>
 </body>
 </html>
