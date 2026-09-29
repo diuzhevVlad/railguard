@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # torch with CUDA 12.1 runtime libraries (RTX 40xx, driver >= 530); segmentation-models-pytorch as used in training
 RUN pip3 install --no-cache-dir torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121 \
-    && pip3 install --no-cache-dir "numpy<2.3" "scipy<1.16" segmentation-models-pytorch==0.5.0 \
+    && pip3 install --no-cache-dir "numpy<2.3" "scipy<1.16" "kiss-icp>=1.3,<2" segmentation-models-pytorch==0.5.0 \
     && python3 -c "import torch, torchvision; assert torch.__version__.startswith('2.5.1') and torch.version.cuda == '12.1', torch.__version__"
 
 # model code, weights, ROS package

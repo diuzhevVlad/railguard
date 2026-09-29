@@ -46,6 +46,23 @@ Visualization Manager:
       Color Transformer: FlatColor
       Color: 255; 160; 60
       Decay Time: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Rail occupancy probability
+      Enabled: true
+      Topic:
+        Value: /railguard/occupancy
+        Reliability Policy: Reliable
+        Depth: 1
+      Style: Points
+      Size (Pixels): 7
+      Color Transformer: Intensity
+      Channel Name: intensity
+      Autocompute Intensity Bounds: false
+      Min Intensity: 0
+      Max Intensity: 1
+      Use rainbow: true
+      Invert Rainbow: false
+      Decay Time: 0
     - Class: rviz_default_plugins/Path
       Name: Centerline
       Enabled: true
@@ -56,6 +73,17 @@ Visualization Manager:
       Line Style: Billboards
       Line Width: 0.15
       Color: 60; 210; 90
+      Pose Style: None
+    - Class: rviz_default_plugins/Path
+      Name: Bayesian filtered centerline
+      Enabled: true
+      Topic:
+        Value: /railguard/centerline_filtered
+        Reliability Policy: Reliable
+        Depth: 5
+      Line Style: Billboards
+      Line Width: 0.20
+      Color: 235; 70; 220
       Pose Style: None
   Global Options:
     Fixed Frame: hesai_lidar

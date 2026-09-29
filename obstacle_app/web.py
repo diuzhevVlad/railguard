@@ -19,6 +19,9 @@ from typing import Literal
 import numpy as np
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+
+from railpath.detection_config import (ObstacleDetectionConfig,
+                                       load_obstacle_detection_config)
 from pydantic import BaseModel, Field, model_validator
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
@@ -27,12 +30,15 @@ from .cloud import preview_xyz
 from .core import ObstacleSpec, WorldObstacleSpec, Progress, Scenario, SimulationBackend
 from .world_map import WorldMapManager, world_mesh, preview_materials, source_fingerprint
 from .detection import INITIAL_SPEED_MPS, build_merged_rail_map, RailPrediction
-from .scan_detection import ScanDetector, display_points, rejected_payload
+from .scan_detection import (ScanDetector, centerline_payload, display_points,
+                             occupancy_payload, rejected_payload)
 from .learned_detection import LearnedDetectionManager, prediction_payload
 from .sampling_backend import RayCastingBackend
 
 
 ROOT = Path(__file__).resolve().parent.parent
+DETECTION_CONFIG_PATH = Path(os.environ.get(
+    "OBSTACLE_DETECTION_CONFIG", ROOT / "railguard/config/railguard.yaml"))
 DATA_ROOT = Path(os.environ.get("OBSTACLE_DATA_DIR", ROOT / "data"))
 OUTPUT_ROOT = Path(os.environ.get("OBSTACLE_OUTPUT_DIR", ROOT / "outputs"))
 MODEL_PATH = Path(os.environ.get("OBSTACLE_MODEL_PATH", ROOT / "models/person_standing/meshes/person.dae"))
@@ -115,9 +121,12 @@ class DetectionRequest(BaseModel):
     bag_id: str
     topic: str
     initial_speed_m_s: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    train_width_m: float = Field(default=2.1, gt=0, le=20, allow_inf_nan=False)
-    train_height_m: float = Field(default=3., gt=0, le=20, allow_inf_nan=False)
-    max_forward_m: float = Field(default=150., ge=5, le=200, allow_inf_nan=False)
+    train_width_m: float | None = Field(default=None, gt=0, le=20, allow_inf_nan=False)
+    train_height_m: float | None = Field(default=None, gt=0, le=20, allow_inf_nan=False)
+    max_forward_m: float | None = Field(default=None, ge=5, le=200, allow_inf_nan=False)
+    bayesian_filter_enabled: bool | None = None
+    centerline_filter_enabled: bool | None = None
+    odometry_enabled: bool | None = None
 
 
 @dataclass
@@ -269,14 +278,21 @@ def create_app(
     model_path: Path = MODEL_PATH,
     detection_map_builder=build_merged_rail_map,
     scan_detector_factory=None,
+    detection_config: ObstacleDetectionConfig | None = None,
 ) -> FastAPI:
+    detection_config = detection_config or load_obstacle_detection_config(DETECTION_CONFIG_PATH)
     manager = JobManager(backend or RayCastingBackend(), output_root)
     detection_manager = DetectionManager(output_root, detection_map_builder)
     map_manager = WorldMapManager(output_root, detection_manager)
-    learned_manager = LearnedDetectionManager(scan_detector_factory)
+    learned_manager = LearnedDetectionManager(scan_detector_factory, detection_config)
+
     models_root = model_path.parent.parent.parent
 
     app = FastAPI(title="Obstacle Bag Studio")
+
+    @app.get("/api/detection-config")
+    def get_detection_config() -> dict:
+        return detection_config.to_parameters()
 
     @app.get("/")
     def index() -> FileResponse:
@@ -435,7 +451,11 @@ def create_app(
                 if not any(c.topic == request.topic and c.msgtype == "sensor_msgs/msg/PointCloud2"
                            for c in reader.connections):
                     raise ValueError("Select a PointCloud2 topic")
-            return asdict(learned_manager.start(request.bag_id, bag, request.topic, request.train_width_m, request.train_height_m, request.max_forward_m))
+            return asdict(learned_manager.start(
+                request.bag_id, bag, request.topic, request.train_width_m,
+                request.train_height_m, request.max_forward_m,
+                request.bayesian_filter_enabled, request.centerline_filter_enabled,
+                request.odometry_enabled))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -472,7 +492,9 @@ def create_app(
         return {"timestamp_ns": str(timestamp_ns), "candidate_points": detection.point_count,
                 "detected": detection.detected, "distance_m": detection.distance_m,
                 **prediction_payload(prediction),
-                "detected_xyz": display_points(detection.points).tolist(), **rejected_payload(detection)}
+                "detected_xyz": display_points(detection.points).tolist(),
+                **rejected_payload(detection), **occupancy_payload(detection),
+                **centerline_payload(detection)}
 
     @app.websocket("/ws/playback")
     async def playback(ws: WebSocket) -> None:
@@ -577,8 +599,10 @@ def create_app(
                                         "obstacle_points": tail,
                                         "removed_points": frame_counts.get(str(bag_ns), {}).get("removed", 0),
                                         "detected_points": len(detected_points),
+                                        **centerline_payload(detection),
                                         "candidate_points": detection.point_count if detection else 0,
                                         **rejected_payload(detection),
+                                        **occupancy_payload(detection),
                                         "detected": detection.detected if detection else False,
                                         "distance_m": detection.distance_m if detection else None,
                                         **(prediction_payload(prediction) if prediction else {"rail_center": None,"rail_continuation": [],"rail_prediction": None})})

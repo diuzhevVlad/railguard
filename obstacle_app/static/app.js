@@ -1,11 +1,11 @@
 const $ = id => document.getElementById(id);
 const ui = {bag:$('bag'),topic:$('topic'),seek:$('seek'),seekPosition:$('seek-position'),seekEnd:$('seek-end'),notice:$('notice'),status:$('frame-status'),time:$('time-display')};
-let appParameters={initial_speed_m_s:0,train_width_m:2.1,train_height_m:3,max_forward_m:150};
+let appParameters={initial_speed_m_s:0,train_width_m:2.1,train_height_m:3,max_forward_m:150,bayesian_filter_enabled:false,centerline_filter_enabled:false,odometry_enabled:false};
 let detectionGeneration=0,resumeAfterDetection=false;
 async function applyParameters({detectionOnly=false}={}){
   for(const input of $('parameters').querySelectorAll('input'))if((!detectionOnly||input.id!=='initial-speed')&&!input.reportValidity())return;
-  const next={initial_speed_m_s:detectionOnly?appParameters.initial_speed_m_s:Number($('initial-speed').value),train_width_m:Number($('train-width').value),train_height_m:Number($('train-height').value),max_forward_m:Number($('detection-distance').value)};
-  if(!Object.values(next).every(Number.isFinite))return;
+  const next={initial_speed_m_s:detectionOnly?appParameters.initial_speed_m_s:Number($('initial-speed').value),train_width_m:Number($('train-width').value),train_height_m:Number($('train-height').value),max_forward_m:Number($('detection-distance').value),bayesian_filter_enabled:$('bayesian-filter').checked,centerline_filter_enabled:$('centerline-filter').checked,odometry_enabled:$('odometry').checked};
+  if(![next.initial_speed_m_s,next.train_width_m,next.train_height_m,next.max_forward_m].every(Number.isFinite))return;
   if(Object.keys(next).every(key=>next[key]===appParameters[key]))return;
   const speedChanged=next.initial_speed_m_s!==appParameters.initial_speed_m_s;
   const wasVisible=detectionVisible||(bagReady&&$('detect').disabled),wasPlaying=resumeAfterDetection||Boolean(socket&&!ended&&!paused);
@@ -14,7 +14,7 @@ async function applyParameters({detectionOnly=false}={}){
   $('detection-legend').hidden=true;$('detection-job').hidden=true;$('detect').disabled=!bagReady;showDetectionButton();
   if(speedChanged){mapEditor.reset();notice('Initial speed changed. Reopen the merged map to prepare its poses.');}
   if(lastFrame&&lastBasePoints&&!mapEditor.active)renderFrame(lastBasePoints,{...lastFrame,detected_points:0});
-  $('parameter-status').textContent=`Active envelope · ${next.train_width_m} × ${next.train_height_m} m · detection to ${next.max_forward_m} m`;
+  $('parameter-status').textContent=`Active envelope · ${next.train_width_m} × ${next.train_height_m} m · detection to ${next.max_forward_m} m · occupancy ${next.bayesian_filter_enabled?'on':'off'} · centerline filter ${next.centerline_filter_enabled?'on':'off'} · odometry ${next.odometry_enabled?'on':'off'}`;
   if(wasVisible&&!mapEditor.active){resumeAfterDetection=wasPlaying;await detect();}
   else if(wasPlaying&&!mapEditor.active)play(false);
 }
@@ -33,6 +33,19 @@ function formatTime(seconds){const s=Math.max(0,Number(seconds)||0);return `${Ma
 function showSeek(seconds,moveHandle=true){const s=Math.max(0,Math.min(seekMax,Number(seconds)||0));if(moveHandle)ui.seek.value=String(s);ui.seekPosition.textContent=formatTime(s);}
 
 function notice(message,kind=''){ui.notice.textContent=message;ui.notice.className='notice '+kind;}
+async function loadDetectionConfig(){
+  const config=await api('/api/detection-config');
+  appParameters={...appParameters,
+    train_width_m:config.train_width_m,train_height_m:config.train_height_m,
+    max_forward_m:config.max_forward_m,
+    bayesian_filter_enabled:config.bayesian_filter_enabled,
+    centerline_filter_enabled:config.centerline_filter_enabled,
+    odometry_enabled:config.odometry_enabled};
+  $('train-width').value=appParameters.train_width_m;$('train-height').value=appParameters.train_height_m;
+  $('detection-distance').value=appParameters.max_forward_m;$('detection-distance-value').textContent=appParameters.max_forward_m+' m';
+  $('bayesian-filter').checked=appParameters.bayesian_filter_enabled;$('centerline-filter').checked=appParameters.centerline_filter_enabled;$('odometry').checked=appParameters.odometry_enabled;
+  $('parameter-status').textContent=`Active envelope · ${appParameters.train_width_m} × ${appParameters.train_height_m} m · detection to ${appParameters.max_forward_m} m · occupancy ${appParameters.bayesian_filter_enabled?'on':'off'} · centerline filter ${appParameters.centerline_filter_enabled?'on':'off'} · odometry ${appParameters.odometry_enabled?'on':'off'}`;
+}
 async function api(url,options){const res=await fetch(url,options);const data=await res.json();if(!res.ok)throw Error(Array.isArray(data.detail)?data.detail.map(e=>e.msg).join('; '):data.detail||res.statusText);return data;}
 function renderModelPicker(container,entries,selected,onChange){
   container.classList.add('model-picker');container.setAttribute('role','group');container.setAttribute('aria-label','Obstacle model');container.value=selected;container.replaceChildren();
@@ -91,7 +104,7 @@ async function loadBag(){
   stopPlayback();
   detectionGeneration++;resumeAfterDetection=false;activeDetectionId=null;detectionVisible=false;lastFrame=null;lastBasePoints=null;
   $('detection-legend').hidden=true;showDetectionButton();$('detection-job').hidden=true;
-  renderer.setPrediction(null);renderer.setPoints(new Float32Array(0));
+  renderer.setPrediction(null);renderer.setOccupancy(null);renderer.setPoints(new Float32Array(0));
   try{
     const info=await api('/api/info?bag_id='+encodeURIComponent(bagId));
     if(loadVersion!==bagLoadVersion)return;
@@ -128,7 +141,7 @@ function renderObstacleIndicator(frame=null){
       const checked=Number(prediction.checked_forward_m)||0;
       if(frame.detected&&Number.isFinite(frame.distance_m)){
         state='obstacle';title='Obstacle ahead';distance=`${frame.distance_m.toFixed(1)} m`;
-        detail='Nearest retained point · distance along predicted track';
+        detail=frame.bayesian_filter_enabled?`Bayesian occupancy ≥ ${Math.round((frame.occupancy_threshold??0)*100)}% · distance along track`:'Nearest retained point · distance along predicted track';
       }else if(!frame.detected){
         state='clear';title='No obstacle detected';detail=`Checked envelope · ${prediction.checked_min_forward_m??0}–${checked.toFixed(0)} m ahead`;
       }
@@ -142,14 +155,17 @@ function renderStatus(frame,pointCount){
   const result=detectionVisible&&activeDetectionId?(frame.rail_prediction?.status==='unavailable'?' · Track unsupported — obstacle detection unavailable':frame.rail_prediction?.status==='error'?' · RailGuard inference failed':frame.detected?` · ${frame.candidate_points} filtered obstacle points · nearest ${frame.distance_m.toFixed(1)} m`:' · No obstacle clusters after filtering'):'';
   const simulation=frame.obstacle_points||frame.removed_points?` · ${frame.obstacle_points||0} obstacle points · ${frame.removed_points||0} hidden background points removed`:'';
   const modelInfo=detectionVisible&&frame.rail_prediction?.status==='ready'?` · RailGuard ${frame.rail_prediction.inference_ms} ms · checked ${frame.rail_prediction.checked_forward_m.toFixed(0)} m · vote horizon ${frame.rail_prediction.horizon_m.toFixed(0)} m${frame.rail_prediction.sigma_max_checked_m!=null?` · max lateral σ ${frame.rail_prediction.sigma_max_checked_m.toFixed(2)} m`:''}`:'';
-  ui.status.textContent=`Frame ${frame.frame} · ${pointCount.toLocaleString()} preview points · ${frame.frame_id}${simulation}${result}${detectionVisible?` · ${frame.rejected_points||0} points rejected by distance/height/cluster filters · ${frame.excluded_rail_points||0} rail points excluded`:""}${modelInfo}`;
+  const temporal=detectionVisible&&frame.bayesian_filter_enabled?` · Bayesian occupancy ${frame.odometry_enabled?'with KISS-ICP':'without odometry'}`:'';
+  const centerlineTemporal=detectionVisible&&frame.centerline_filter_enabled?` · centerline Kalman filter ${frame.centerline_filter_odometry_used?'with KISS-ICP':'without odometry'}`:'';
+  ui.status.textContent=`Frame ${frame.frame} · ${pointCount.toLocaleString()} preview points · ${frame.frame_id}${simulation}${result}${detectionVisible?` · ${frame.rejected_points||0} points rejected by distance/height/cluster filters · ${frame.excluded_rail_points||0} rail points excluded`:""}${temporal}${centerlineTemporal}${modelInfo}`;
   ui.status.title=ui.status.textContent;
 }
 function renderFrame(points,frame){
   if(mapEditor.active)return;
   renderer.setPoints(points,frame.obstacle_points||0,frame.detected_points||0);
-  renderer.setPrediction(detectionVisible?frame.rail_center:null,detectionVisible?frame.rail_points:null,frame.rail_prediction?.lookahead_limit_m,frame.rail_prediction?.checked_min_forward_m||0,frame.rail_prediction?.train_width_m??2.1,frame.rail_prediction?.train_height_m??3);
+  renderer.setPrediction(detectionVisible?frame.rail_center:null,detectionVisible?frame.rail_points:null,frame.rail_prediction?.lookahead_limit_m,frame.rail_prediction?.checked_min_forward_m||0,frame.rail_prediction?.train_width_m??2.1,frame.rail_prediction?.train_height_m??3,detectionVisible?frame.filtered_rail_center:null);
   renderer.setRejected(detectionVisible?frame.rejected_xyz:null);
+  renderer.setOccupancy(detectionVisible?frame.rail_occupancy:null);
   renderStatus(frame,points.length/3);
   ui.time.textContent=frame.time_seconds.toFixed(2)+' s';
   if(!scrubbing)showSeek(frame.time_seconds);
@@ -341,7 +357,7 @@ class CloudRenderer{
       }`;
     const shader=(type,source)=>{const sh=gl.createShader(type);gl.shaderSource(sh,source);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(sh));return sh;};
     this.program=gl.createProgram();gl.attachShader(this.program,shader(gl.VERTEX_SHADER,vs));gl.attachShader(this.program,shader(gl.FRAGMENT_SHADER,fs));gl.linkProgram(this.program);
-    this.buffer=gl.createBuffer();this.grid=gl.createBuffer();this.leftRail=gl.createBuffer();this.rightRail=gl.createBuffer();this.train=gl.createBuffer();this.rejectedBuffer=gl.createBuffer();this.rejectedCount=0;this.railPointsBuffer=gl.createBuffer();this.railPointsCount=0;this.centerlineBuffer=gl.createBuffer();this.centerlineCount=0;this.leftRailCount=0;this.rightRailCount=0;this.trainCount=0;
+    this.buffer=gl.createBuffer();this.grid=gl.createBuffer();this.leftRail=gl.createBuffer();this.rightRail=gl.createBuffer();this.train=gl.createBuffer();this.rejectedBuffer=gl.createBuffer();this.rejectedCount=0;this.railPointsBuffer=gl.createBuffer();this.railPointsCount=0;this.centerlineBuffer=gl.createBuffer();this.centerlineCount=0;this.filteredCenterlineBuffer=gl.createBuffer();this.filteredCenterlineCount=0;this.occupancyBuffer=gl.createBuffer();this.occupancyBins=[];this.leftRailCount=0;this.rightRailCount=0;this.trainCount=0;
     const lines=[];for(let i=-20;i<=20;i+=2){lines.push(-20,i,-2,20,i,-2,i,-20,-2,i,20,-2);}
     lines.push(0,0,0,10,0,0,0,0,0,0,-20,0,0,0,0,0,0,5);
     this.gridCount=lines.length/3;gl.bindBuffer(gl.ARRAY_BUFFER,this.grid);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(lines),gl.STATIC_DRAW);
@@ -459,7 +475,7 @@ class CloudRenderer{
     this.fixedMeshes=meshes.map(mesh=>{const layer={mesh,position:gl.createBuffer(),color:gl.createBuffer(),uv:gl.createBuffer()};this.uploadMesh(mesh,layer);return layer;});this.requestDraw();
   }
   setMapLines(center,trajectory){
-    const gl=this.gl;this.trainCount=0;this.centerlineCount=0;this.railPointsCount=0;this.rejectedCount=0;
+    const gl=this.gl;this.trainCount=0;this.centerlineCount=0;this.filteredCenterlineCount=0;this.railPointsCount=0;this.rejectedCount=0;this.occupancyBins=[];
     for(const [points,buffer,count] of [[center,this.leftRail,'leftRailCount'],[trajectory,this.rightRail,'rightRailCount']]){
       const lines=[];for(let i=1;i<points.length;i++)lines.push(...points[i-1],...points[i]);
       gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(lines),gl.DYNAMIC_DRAW);this[count]=lines.length/3;
@@ -479,21 +495,48 @@ class CloudRenderer{
       if((p[0]-x)**2+(p[1]-y)**2<=36&&p[2]<nearest){selected=point;nearest=p[2];}
     }return selected;
   }
-  setPrediction(center,railPoints=null,maxForward=null,minForward=0,width=2.1,height=3){
+  setOccupancy(rows){
     if(!this.gl)return;
-    const gl=this.gl,left=[],right=[],train=[],middle=[];
+    const cells=(rows||[]).filter(row=>row&&row.length>=4);
+    const buckets=Array.from({length:10},()=>[]);
+    for(let i=0;i<cells.length;i++){
+      const p=cells[i],before=cells[Math.max(0,i-1)],after=cells[Math.min(cells.length-1,i+1)];
+      const dx=after[0]-before[0],dy=after[1]-before[1],norm=Math.hypot(dx,dy)||1;
+      const tx=dx||dy?dx/norm:0,ty=dx||dy?dy/norm:-1,nx=ty,ny=-tx;
+      const previous=i?Math.hypot(p[0]-before[0],p[1]-before[1]):Math.hypot(after[0]-p[0],after[1]-p[1])||1;
+      const next=i+1<cells.length?Math.hypot(after[0]-p[0],after[1]-p[1]):previous;
+      const halfLength=Math.max(.15,Math.min(.6,.24*(previous+next))),halfWidth=.35,z=p[2]+.06;
+      const a=[p[0]-tx*halfLength+nx*halfWidth,p[1]-ty*halfLength+ny*halfWidth,z];
+      const b=[p[0]+tx*halfLength+nx*halfWidth,p[1]+ty*halfLength+ny*halfWidth,z];
+      const c=[p[0]+tx*halfLength-nx*halfWidth,p[1]+ty*halfLength-ny*halfWidth,z];
+      const d=[p[0]-tx*halfLength-nx*halfWidth,p[1]-ty*halfLength-ny*halfWidth,z];
+      const probability=Math.max(0,Math.min(1,Number(p[3])||0));
+      buckets[Math.min(9,Math.floor(probability*10))].push(...a,...d,...b,...b,...d,...c);
+    }
+    const positions=[];this.occupancyBins=[];
+    for(const bucket of buckets){this.occupancyBins.push(bucket.length/3);positions.push(...bucket);}
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER,this.occupancyBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER,new Float32Array(positions),this.gl.DYNAMIC_DRAW);
+    this.requestDraw();
+  }
+  setPrediction(center,railPoints=null,maxForward=null,minForward=0,width=2.1,height=3,filteredCenter=null){
+    if(!this.gl)return;
+    const gl=this.gl,left=[],right=[],train=[],middle=[],filteredMiddle=[];
+    const envelopeCenter=filteredCenter&&filteredCenter.length>=2?filteredCenter:center;
+    if(center)for(let i=1;i<center.length;i++)middle.push(...center[i-1],...center[i]);
+    if(filteredCenter)for(let i=1;i<filteredCenter.length;i++)filteredMiddle.push(...filteredCenter[i-1],...filteredCenter[i]);
     const rails=new Float32Array((railPoints||[]).flat());
     gl.bindBuffer(gl.ARRAY_BUFFER,this.railPointsBuffer);gl.bufferData(gl.ARRAY_BUFFER,rails,gl.DYNAMIC_DRAW);this.railPointsCount=rails.length/3;
-    if(center&&center.length>=2){
+    if(envelopeCenter&&envelopeCenter.length>=2){
       const corners=[];
-      for(let i=0;i<center.length;i++){
-        const p=center[i],before=center[Math.max(0,i-1)],after=center[Math.min(center.length-1,i+1)];
+      for(let i=0;i<envelopeCenter.length;i++){
+        const p=envelopeCenter[i],before=envelopeCenter[Math.max(0,i-1)],after=envelopeCenter[Math.min(envelopeCenter.length-1,i+1)];
         const dx=after[0]-before[0],dy=after[1]-before[1],norm=Math.hypot(dx,dy)||1,nx=dy/norm,ny=-dx/norm;
         const l=[p[0]+nx*.75,p[1]+ny*.75,p[2]],r=[p[0]-nx*.75,p[1]-ny*.75,p[2]];
         const lb=[p[0]+nx*width/2,p[1]+ny*width/2,p[2]],rb=[p[0]-nx*width/2,p[1]-ny*width/2,p[2]];
         const lt=[lb[0],lb[1],lb[2]+height],rt=[rb[0],rb[1],rb[2]+height];
         corners.push({l,r,lb,rb,lt,rt});
-        if(i){middle.push(...center[i-1],...p);const q=corners[i-1];for(const key of ['lb','rb','lt','rt']){
+        if(i){const q=corners[i-1];for(const key of ['lb','rb','lt','rt']){
           const a=q[key],b=corners[i][key];
           const da=-a[1],db=-b[1],far=maxForward??Infinity;
           if(db>=minForward&&da<=far){
@@ -501,10 +544,10 @@ class CloudRenderer{
             train.push(...a.map((v,j)=>v+lo*(b[j]-v)),...a.map((v,j)=>v+hi*(b[j]-v)));
           }
         }}
-        if((-p[1]>=minForward)&&(maxForward==null||-p[1]<=maxForward)&&(i%80===0||i===center.length-1)){train.push(...lb,...lt,...lt,...rt,...rt,...rb,...rb,...lb);}
+        if((-p[1]>=minForward)&&(maxForward==null||-p[1]<=maxForward)&&(i%80===0||i===envelopeCenter.length-1)){train.push(...lb,...lt,...lt,...rt,...rt,...rb,...rb,...lb);}
       }
     }
-    for(const [buffer,data,count] of [[this.leftRail,left,'leftRailCount'],[this.rightRail,right,'rightRailCount'],[this.train,train,'trainCount'],[this.centerlineBuffer,middle,'centerlineCount']]){
+    for(const [buffer,data,count] of [[this.leftRail,left,'leftRailCount'],[this.rightRail,right,'rightRailCount'],[this.train,train,'trainCount'],[this.centerlineBuffer,middle,'centerlineCount'],[this.filteredCenterlineBuffer,filteredMiddle,'filteredCenterlineCount']]){
       gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(data),gl.DYNAMIC_DRAW);this[count]=data.length/3;
     }
     this.requestDraw();
@@ -521,16 +564,28 @@ class CloudRenderer{
     gl.enableVertexAttribArray(this.position);
     gl.bindBuffer(gl.ARRAY_BUFFER,this.grid);gl.vertexAttribPointer(this.position,3,gl.FLOAT,false,0,0);gl.uniform1f(this.uniforms.uSize,1);gl.uniform4f(this.uniforms.uColor,.23,.24,.28,.6);gl.drawArrays(gl.LINES,0,this.gridCount);
     if(this.count){gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);gl.vertexAttribPointer(this.position,3,gl.FLOAT,false,0,0);gl.uniform1f(this.uniforms.uSize,3);gl.uniform4f(this.uniforms.uColor,.68,.70,.75,1);gl.drawArrays(gl.POINTS,0,this.count-this.obstacleCount-this.detectedCount);if(this.obstacleCount){gl.uniform1f(this.uniforms.uSize,4);gl.uniform4f(this.uniforms.uColor,1,.67,.35,1);gl.drawArrays(gl.POINTS,this.count-this.obstacleCount-this.detectedCount,this.obstacleCount);}}
-    for(const [buffer,count,color] of [[this.leftRail,this.leftRailCount,[.34,.65,1,1]],[this.rightRail,this.rightRailCount,[.34,.65,1,1]],[this.train,this.trainCount,[.55,.46,.27,1]],[this.centerlineBuffer,this.centerlineCount,[.2,1,.3,1]]]){
+    for(const [buffer,count,color] of [[this.leftRail,this.leftRailCount,[.34,.65,1,1]],[this.rightRail,this.rightRailCount,[.34,.65,1,1]],[this.train,this.trainCount,[.55,.46,.27,1]],[this.centerlineBuffer,this.centerlineCount,[.2,1,.3,1]],[this.filteredCenterlineBuffer,this.filteredCenterlineCount,[.92,.27,.86,1]]]){
       if(count){gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.vertexAttribPointer(this.position,3,gl.FLOAT,false,0,0);gl.uniform4fv(this.uniforms.uColor,color);
         // WebGL implementations often clamp lineWidth to one pixel. Offset
         // passes keep the centerline three CSS pixels wide on those devices.
-        if(buffer===this.centerlineBuffer){
+        if(buffer===this.centerlineBuffer||buffer===this.filteredCenterlineBuffer){
           for(let x=-1;x<=1;x++)for(let y=-1;y<=1;y++){
             gl.uniform2f(this.uniforms.uPixelOffset,2*x/w,2*y/h);gl.drawArrays(gl.LINES,0,count);
           }
           gl.uniform2f(this.uniforms.uPixelOffset,0,0);
         }else gl.drawArrays(gl.LINES,0,count);}
+    }
+    if(this.occupancyBins.some(Boolean)){
+      gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+      gl.bindBuffer(gl.ARRAY_BUFFER,this.occupancyBuffer);gl.vertexAttribPointer(this.position,3,gl.FLOAT,false,0,0);
+      let offset=0;
+      for(let index=0;index<this.occupancyBins.length;index++){
+        const count=this.occupancyBins[index],probability=(index+.5)/10;
+        const color=probability<.5?[.1+1.8*probability,.35+probability,1-1.8*probability,.72]:[1,.85-1.5*(probability-.5),.1-.1*(probability-.5),.72];
+        if(count){gl.uniform4fv(this.uniforms.uColor,color);gl.drawArrays(gl.TRIANGLES,offset,count);}
+        offset+=count;
+      }
+      gl.disable(gl.BLEND);
     }
     if(this.mapMode){
       const layers=[...(this.fixedMeshes||[])];
@@ -563,18 +618,19 @@ const mapEditor=new MapEditor(renderer);
 $('show-rejected').addEventListener('change',()=>renderer.requestDraw());
 ui.bag.addEventListener('change',loadBag);
 $('add-obstacle').addEventListener('click',addObstacle);
-ui.topic.addEventListener('change',()=>{detectionGeneration++;resumeAfterDetection=false;mapEditor.reset();stopPlayback();activeDetectionId=null;detectionVisible=false;lastFrame=null;lastBasePoints=null;$('detection-legend').hidden=true;$('detection-job').hidden=true;showDetectionButton();renderer.setPrediction(null);renderer.setPoints(new Float32Array(0));});
+ui.topic.addEventListener('change',()=>{detectionGeneration++;resumeAfterDetection=false;mapEditor.reset();stopPlayback();activeDetectionId=null;detectionVisible=false;lastFrame=null;lastBasePoints=null;$('detection-legend').hidden=true;$('detection-job').hidden=true;showDetectionButton();renderer.setPrediction(null);renderer.setOccupancy(null);renderer.setPoints(new Float32Array(0));});
 ui.seek.addEventListener('input',()=>{scrubbing=true;showSeek(ui.seek.value,false);});
 ui.seek.addEventListener('change',commitSeek);
 $('play').addEventListener('click',()=>play());$('pause').addEventListener('click',pause);$('step').addEventListener('click',step);$('simulate').addEventListener('click',simulate);$('detect').addEventListener('click',detect);
 showDetectionButton();
 // Model controls must not wait for bag metadata or playback initialization.
 const modelReady=loadModels().catch(e=>notice('Cannot load obstacle models: '+e.message,'error'));
-const bagsReady=refreshBags().catch(e=>notice(e.message,'error'));
+const configReady=loadDetectionConfig().catch(e=>notice('Cannot load detection config: '+e.message,'error'));
+const bagsReady=configReady.then(()=>refreshBags()).catch(e=>notice(e.message,'error'));
 Promise.all([modelReady,bagsReady]).then(()=>{if(models.length&&!obstacles.length)addObstacle();});
 
 $('apply-parameters').onclick=applyParameters;
-for(const id of ['train-width','train-height','detection-distance']){
+for(const id of ['train-width','train-height','detection-distance','bayesian-filter','odometry']){
   $(id).addEventListener('change',()=>applyParameters({detectionOnly:true}));
 }
 $('detection-distance').oninput=()=>{$('detection-distance-value').textContent=$('detection-distance').value+' m';};

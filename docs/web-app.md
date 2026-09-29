@@ -74,9 +74,9 @@ This tolerance is configurable as `min_height_above_track_m` in
 be missed. Remaining candidates pass a per-scan 3D connected-component filter: only clusters of
 at least 5 points are marked red. The neighbor radius interpolates between
 0.2 m at 0–30 m ahead, 0.35 m at 80 m, and 0.6 m at 150 m. Both points must
-satisfy their radius for a connection. Configure these values through
-`ObstacleFilterConfig` in `railpath/obstacle_filter.py`, optionally passed to
-`ScanDetector(filter_config=...)`. Up to 20,000 retained and 20,000 rejected
+satisfy their radius for a connection. Configure these values in the shared
+`railguard/config/railguard.yaml`; both the ROS node and web app load it at startup.
+Up to 20,000 retained and 20,000 rejected
 points are sent as display overlays; filtering uses full-resolution candidates.
 Enable **Show rejected points** to inspect points discarded by distance, height or clustering in purple, including
 while paused. This is an experimental noise filter: sparse wires and distant

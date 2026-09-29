@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from obstacle_app.detection import RailPrediction, detect_obstacle_points
 from obstacle_app.obstacle_filter import ObstacleFilterConfig
 from obstacle_app.scan_detection import ScanDetector
+from railpath.detection_config import ObstacleDetectionConfig
 from obstacle_app.web import create_app
 from tests.test_obstacle_app import make_bag, MODEL, fake_scan_detector
 from tests.test_world_map import build_test_map
@@ -15,6 +16,25 @@ from tests.test_ray_rendering import cloud
 
 
 class AppParametersTests(unittest.TestCase):
+    def test_app_exposes_shared_detection_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);data=root/'data';out=root/'out';data.mkdir();out.mkdir()
+            defaults=ObstacleDetectionConfig()
+            config=ObstacleDetectionConfig(
+                obstacle=replace(defaults.obstacle,train_width_m=4.2),
+                bayesian=replace(defaults.bayesian,prior_probability=.4,
+                                  point_hit_probability=.6,miss_probability=.2),
+                max_forward_m=120.,bayesian_filter_enabled=True,centerline_filter_enabled=True)
+            client=TestClient(create_app(data_root=data,output_root=out,model_path=MODEL,
+                                         detection_config=config))
+            response=client.get('/api/detection-config').json()
+            self.assertEqual(response['train_width_m'],4.2)
+            self.assertEqual(response['occupancy_prior_probability'],.4)
+            self.assertEqual(response['max_forward_m'],120.)
+            self.assertTrue(response['bayesian_filter_enabled'])
+            client.close()
+
+            self.assertTrue(response['centerline_filter_enabled'])
     def test_dimensions_and_range_change_actual_classification(self):
         depth=np.arange(1,201,.1,dtype=np.float32)
         prediction=RailPrediction(np.column_stack((depth*0,-depth,depth*0)),depth,
@@ -54,6 +74,14 @@ class AppParametersTests(unittest.TestCase):
             self.assertNotEqual(first['id'],second['id'])
             self.assertEqual(second['id'],client.post('/api/detections',json=changed).json()['id'])
             await_job('/api/detections/',second)
+            temporal=client.post('/api/detections',json={
+                **changed,'bayesian_filter_enabled':True,'centerline_filter_enabled':True,
+                'odometry_enabled':True}).json()
+            self.assertNotEqual(second['id'],temporal['id'])
+            ready=await_job('/api/detections/',temporal)
+            self.assertTrue(ready['bayesian_filter_enabled'])
+            self.assertTrue(ready['odometry_enabled'])
+            self.assertTrue(ready['centerline_filter_enabled'])
             for param,value in [('train_width_m',0),('train_height_m',-1),('max_forward_m',201),('initial_speed_m_s',-1)]:
                 self.assertEqual(client.post('/api/detections',json={**request,param:value}).status_code,422)
             a=await_job('/api/maps/jobs/',client.post('/api/maps',json={**request,'initial_speed_m_s':3}).json())

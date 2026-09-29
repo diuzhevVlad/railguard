@@ -128,7 +128,8 @@ between the container's root user and a host user carries no data).
 | `/railguard/centerline`        | `nav_msgs/Path`           | track centre at 1 m steps up to 200 m ahead, in the frame and stamp of the input cloud    |
 | `/railguard/rails`             | `sensor_msgs/PointCloud2` | points segmented as rail                                                                  |
 | `/railguard/obstacles`         | `sensor_msgs/PointCloud2` | filtered obstacle XYZ; input cloud's frame and stamp; empty when none remain              |
-| `/railguard/obstacle_detected` | `std_msgs/Bool`           | whether any obstacle points remain in this scan                                           |
+| `/railguard/occupancy`         | `sensor_msgs/PointCloud2` | 1 m centreline grid; `intensity` is posterior occupancy probability in [0, 1]              |
+| `/railguard/obstacle_detected` | `std_msgs/Bool`           | occupied posterior exists (or current obstacle points when Bayesian filtering is disabled) |
 | `/railguard/obstacle_distance` | `std_msgs/Float32`        | nearest retained point's distance along the predicted track, metres; NaN when none remain |
 
 The subscription has depth 1, so only the newest scan waits while one is processed and the node never falls behind.
@@ -149,7 +150,7 @@ The subscription has depth 1, so only the newest scan waits while one is process
 ```
 Dockerfile, entrypoint.sh, fastdds_udp.xml   image: ROS 2 Humble ros-base + rosbag2 + RViz2, PyTorch 2.5.1 / CUDA 12.1
 railguard/                                   ROS 2 package: node, launch, config, RViz layout
-railpath/                                    model inference, refiner, and shared obstacle filtering
+railpath/                                    model inference, refiner, and shared spatial/temporal obstacle filtering
 obstacle_app/                                browser app, bag reader, simulation backends, map editor
 models/                                     obstacle meshes, model descriptions, and previews
 tools/, tests/                              visualization utilities and regression checks
@@ -212,11 +213,15 @@ minute of data first.
 
 The obstacle check consumes `/railguard/centerline` and the input cloud: every return inside the train's clearance
 envelope swept along the centerline is an obstacle candidate, and the nearest one gives the distance.
-The node runs `railpath/obstacle_filter.py` immediately after inference, using the same scan and model
-prediction. This is a standalone NumPy/SciPy port of the web app's filtering; it does not import the app, estimate
-odometry, or change the model's rail/centerline outputs. The RViz layout shows retained obstacle points in orange.
+The node and web app both run the same `railpath/obstacle_filter.py` spatial filter and
+`railpath/occupancy_filter.py` temporal pipeline and `railpath/centerline_filter.py` centerline state estimator.
+Neither adapter owns filtering logic. Temporal occupancy and centerline filtering
+and KISS-ICP odometry can be enabled independently; the raw model centerline remains separately available. The RViz
+layout shows retained obstacle points in orange and occupancy probabilities with an intensity colour map.
 
-Settings in `railguard/config/railguard.yaml` are read at startup (restart the node after editing):
+`railguard/config/railguard.yaml` is the single obstacle-detection config for both the ROS node and web app. Both read
+it at startup, so restart after editing. The web image copies this file during its build; set
+`OBSTACLE_DETECTION_CONFIG` to load another path in a non-ROS deployment.
 
 | parameter                         | default   | meaning                                                                  |
 | --------------------------------- | --------- | ------------------------------------------------------------------------ |
@@ -228,6 +233,37 @@ Settings in `railguard/config/railguard.yaml` are read at startup (restart the n
 | `near_min_height_above_track_m` | `0.20`  | stricter height threshold inside the near region                         |
 | `near_height_distance_m`        | `10.0`  | extent of the near region (exclusive)                                    |
 | `min_cluster_points`            | `5`     | minimum connected group size                                             |
+| `bayesian_filter_enabled`       | `false` | fuse obstacle evidence over consecutive scans on a 1D occupancy grid          |
+| `centerline_filter_enabled`     | `false` | Kalman-style fusion of consecutive centerline predictions                     |
+| `odometry_enabled`              | `false` | transform temporal state into the current local LiDAR frame with KISS-ICP      |
+| `centerline_filter_initial_variance_m2` | `0.25` | covariance assigned to a new or unmatched centerline sample             |
+| `centerline_filter_process_variance_m2` | `0.02` | uncertainty added by each predict step; lower values reduce temporal jitter |
+| `centerline_filter_measurement_variance_m2` | `0.09` | assumed variance of the current model prediction                     |
+| `centerline_filter_measurement_variance_growth_m2_per_m` | `0.0` | optional extra measurement variance per metre; calibrated model sigma is preferred |
+| `centerline_filter_max_measurement_variance_m2` | `0.50` | cap on distance/model-derived measurement variance |
+| `centerline_filter_use_model_uncertainty` | `true` | use calibrated per-distance model sigma when available |
+| `centerline_filter_max_correspondence_distance_m` | `2.0` | association gate between predicted and measured samples             |
+| `occupancy_grid_resolution_m`   | `1.0`   | spacing of probability samples along the centreline                           |
+| `occupancy_prior_probability`   | `0.08`  | starting probability for new or unmatched cells                              |
+| `occupancy_point_hit_probability` | `0.40` | independent occupied evidence contributed by each retained obstacle point     |
+| `occupancy_miss_probability`    | `0.07`  | free evidence for a cell with no retained obstacle points                     |
+| `occupancy_detection_probability` | `0.90` | posterior threshold for an occupied cell and obstacle alert                   |
+| `occupancy_prediction_decay`    | `0.95`  | decay of predicted log odds toward the prior on every frame                   |
+| `occupancy_prediction_diffusion` | `0.05` | fraction of predicted evidence spread between adjacent centreline cells       |
+| `occupancy_neighbor_hit_weight` | `0.25`  | adjacent cells receive this fraction of a point's hit evidence                 |
+| `occupancy_max_scan_hit_probability` | `0.85` | positive evidence ceiling per scan; below threshold requires confirmation  |
+| `occupancy_immediate_near_distance_m` | `50.0` | range where strong current evidence may bypass temporal confirmation       |
+| `occupancy_immediate_close_distance_m` | `15.0` | close clusters accepted immediately because their geometry is reliable     |
+| `occupancy_immediate_near_probability` | `0.75` | minimum posterior evidence for the near-range bypass                       |
+| `occupancy_immediate_far_distance_m` | `110.0` | far clusters bypass confirmation to preserve sparse long-range detections   |
+| `occupancy_max_point_evidence`  | `7`     | cap on points contributing evidence to one cell in one scan                   |
+| `occupancy_max_log_odds`        | `8.0`   | saturation bound for accumulated confidence                                  |
+| `occupancy_max_time_gap_s`      | `1.0`   | reset threshold for gaps, seeks, or non-monotonic timestamps                  |
+| `odometry_scan_stride`          | `8`     | use every eighth scan point in each KISS-ICP update                           |
+
+An alert always requires a valid obstacle cluster in the current scan. Mid-range clusters also require a posterior
+cell above the threshold; strong near evidence and sparse far clusters use the configured immediate policy. Stale
+probability remains available for prediction and visualization without raising an alert.
 
 Coordinates are metres in the LiDAR frame: forward −Y, up +Z. Forward cutoffs use −Y; the reported obstacle distance
 uses arc length along the predicted centerline. The model's curve is interpolated at 0.25 m spacing for envelope
@@ -235,18 +271,45 @@ queries, without extending it past its finite predictions. Segmented rail points
 numerical matching tolerance. Connections use 3D distance: radius 0.20 m to 30 m, linearly increasing to 0.35 m at
 80 m and 0.60 m at 150 m, then constant. A connection must fit both endpoints' radii. Connected groups of at least
 five points survive; a chain is sufficient. Far decisions retain the baseline 10 cm rule, including at the 10 m
+
+When centerline filtering is enabled, each dense XYZ centerline sample carries an isotropic covariance. The previous
+posterior is the Kalman prior and the current model centerline is the measurement. Process variance is added during
+prediction. Well-associated samples use the Kalman gain; prior influence fades continuously near the association gate
+and the fade weights are smoothed along the line, avoiding a jump where only part of the line matches. Unmatched
+samples use the current measurement. Obstacle filtering uses this posterior centerline. The raw line remains green in
+the web app and on `/railguard/centerline`; the magenta posterior is shown separately and published on
+`/railguard/centerline_filtered`.
 boundary. The implementation includes bounded neighbor searches, dense-cell shortcuts, and overlapping regional
 passes for large envelopes, as in the app.
 
-Each scan publishes an obstacle cloud and both scalar results, including empty/false/NaN results to clear previous
-detections. False means no retained points, not a guarantee of a clear track (an unsupported centerline also has no
-detections). The scalar topics have no header; use the stamped obstacle cloud when exact synchronization is needed.
+When the Bayesian filter is enabled, each retained point is assigned to its nearest 1 m centreline cell. Updates use
+log odds: every point contributes occupied evidence, so a denser obstacle return produces a stronger posterior, while
+a cell with no obstacle return receives free evidence. Adjacent cells receive weaker hit evidence, and the predict
+step diffuses a configurable fraction of history to adjacent cells to tolerate bin and odometry jitter. Point evidence
+is capped both by count and by a per-scan probability ceiling. With the supplied ceiling (`0.90`) below the alert
+threshold (`0.95`), a new obstacle must be supported by more than one scan, while repeated sparse returns at long range
+still accumulate. The detection flag and distance come from cells at or above the configured
+posterior threshold; the obstacle cloud contains current returns in those occupied cells.
+
+With odometry enabled, KISS-ICP estimates a LiDAR-to-odometry pose for each scan. The predict step transforms the
+previous occupancy cells and centerline posterior through `inverse(current_pose) @ previous_pose`; occupancy is then
+projected onto the new centerline and centerline samples are associated geometrically. State is stationary in odometry
+space while filtering and published geometry remain in the current local LiDAR frame. With odometry disabled both
+filters use identity motion. A non-monotonic timestamp or a gap over `occupancy_max_time_gap_s` resets both state
+estimators, which also makes bag seeks safe.
+
+Each scan publishes raw and filtered centerlines, obstacle and occupancy clouds, plus both scalar results. An alert
+still requires a valid current-scan obstacle cluster; stale occupancy remains visible but cannot alert by itself. When
+filtering is disabled, the occupancy cloud and filtered centerline path are empty and the original single-scan
+behaviour is preserved. False is not a guarantee of a clear track (an unsupported centerline also has no detections). The scalar
+topics have no header; use the stamped clouds when exact synchronization is needed.
 
 ```sh
 ros2 topic echo /railguard/obstacle_detected
 ros2 topic echo /railguard/obstacle_distance
 # Pure filtering tests; NumPy and SciPy are sufficient, no ROS/model weights required:
 PYTHONPATH=.:railguard python3 -m unittest discover -s tests -p 'test_ros_obstacle_filter.py'
+PYTHONPATH=.:railguard python3 -m unittest tests.test_bayesian_occupancy
 ```
 
 ## Experiments

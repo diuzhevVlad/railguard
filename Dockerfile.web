@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements-web.txt
 COPY railpath /app/railpath
 ENV PYTHONPATH=/app RAILGUARD_DEVICE=auto RAILGUARD_CPU_THREADS=4
 COPY obstacle_app /app/obstacle_app
+COPY railguard/config/railguard.yaml /app/railguard/config/railguard.yaml
 COPY models/niva_car/meshes/niva.dae /app/models/niva_car/meshes/niva.dae
 COPY models/person_standing/meshes/person.dae /app/models/person_standing/meshes/person.dae
 COPY models/person_photo/meshes/person.dae /app/models/person_photo/meshes/person.dae

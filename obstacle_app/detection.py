@@ -8,8 +8,6 @@ from typing import Protocol
 import numpy as np
 from scipy.spatial import cKDTree
 from scipy.ndimage import gaussian_filter1d
-from kiss_icp.config import load_config
-from kiss_icp.kiss_icp import KissICP
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
@@ -133,6 +131,13 @@ def merged_trail_from_anchors(anchors: list[np.ndarray], tail: np.ndarray) -> Me
 def build_merged_rail_map(bag: Path, topic: str, initial_speed_m_s: float,
                           output_path: Path, progress: Progress) -> Path:
     """Estimate poses and merge detected rails for all frames in a source bag."""
+    try:
+        from kiss_icp.config import load_config
+        from kiss_icp.kiss_icp import KissICP
+    except ImportError as exc:
+        raise RuntimeError(
+            "KISS-ICP is required to build the merged obstacle-placement map"
+        ) from exc
     config = load_config(None)
     config.data.deskew = False
     odometry = KissICP(config)

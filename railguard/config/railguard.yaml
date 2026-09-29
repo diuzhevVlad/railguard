@@ -13,3 +13,35 @@ railguard_node:
     near_min_height_above_track_m: 0.20
     near_height_distance_m: 10.0
     min_cluster_points: 5
+    distance_knots_m: [0.0, 30.0, 80.0, 150.0]
+    radius_knots_m: [0.2, 0.2, 0.35, 0.6]
+    # Optional temporal Bayesian filter. KISS-ICP predicts stationary obstacle
+    # cells and the filtered centerline into the current local LiDAR frame.
+    bayesian_filter_enabled: false
+    centerline_filter_enabled: false
+    odometry_enabled: false
+    # Kalman-style centerline state: scalar isotropic variance per XYZ sample.
+    centerline_filter_initial_variance_m2: 0.25
+    centerline_filter_process_variance_m2: 0.02
+    centerline_filter_measurement_variance_m2: 0.09
+    centerline_filter_measurement_variance_growth_m2_per_m: 0.0
+    centerline_filter_max_measurement_variance_m2: 0.50
+    centerline_filter_use_model_uncertainty: true
+    centerline_filter_max_correspondence_distance_m: 2.0
+    occupancy_grid_resolution_m: 1.0
+    occupancy_prior_probability: 0.08
+    occupancy_point_hit_probability: 0.4      # applied once per obstacle point (capped below)
+    occupancy_miss_probability: 0.07
+    occupancy_detection_probability: 0.90
+    occupancy_prediction_decay: 0.95
+    occupancy_prediction_diffusion: 0.05              # spread predicted log odds to adjacent rail cells
+    occupancy_neighbor_hit_weight: 0.25               # adjacent cell receives this fraction of point evidence
+    occupancy_max_scan_hit_probability: 0.85          # below alert threshold: require repeated scans
+    occupancy_immediate_close_distance_m: 15.0        # very near clusters are geometrically reliable
+    occupancy_immediate_near_distance_m: 50.0         # strong evidence can alert immediately through this range
+    occupancy_immediate_near_probability: 0.75
+    occupancy_immediate_far_distance_m: 110.0         # preserve sparse far-obstacle recall despite path jitter
+    occupancy_max_point_evidence: 7
+    occupancy_max_log_odds: 8.0
+    occupancy_max_time_gap_s: 1.0                      # reset after seeks/dropped intervals
+    odometry_scan_stride: 8

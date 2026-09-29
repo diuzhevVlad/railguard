@@ -130,6 +130,11 @@ class ObstacleDetection:
     points: np.ndarray
     rejected_points: np.ndarray | None = None
     excluded_rail_count: int = 0
+    occupancy: object | None = None
+    bayesian_filtered: bool = False
+    odometry_used: bool = False
+    centerline_estimate: object | None = None
+    centerline_filtered: bool = False
 
 
 def envelope_candidates(xyz: np.ndarray, prediction: RailPrediction,
@@ -215,6 +220,45 @@ def detect_obstacle_points(xyz: np.ndarray, prediction: RailPrediction,
     distance = float(np.min(prediction.distance_along_m[nearest[keep]])) if len(points) else None
     return ObstacleDetection(bool(len(points)), len(points), distance, points, candidates[~keep & ~is_rail], int(is_rail.sum()))
 
+def make_rail_prediction(centerline, rail_points=None, max_forward_m=150.0, sigma_m=None):
+    """Adapt the model's raw centreline and rail points for shared filtering."""
+    curve = np.asarray(centerline, dtype=np.float32)
+    if curve.ndim != 2 or curve.shape[1] != 3:
+        raise ValueError('Expected an Mx3 centerline')
+    if not np.isfinite(max_forward_m) or max_forward_m < 0:
+        raise ValueError('max_forward_m must be finite and nonnegative')
+    invalid = np.flatnonzero(~np.isfinite(curve).all(axis=1))
+    path = curve[:int(invalid[0])] if len(invalid) else curve
+    center, distances = np.empty((0, 3), np.float32), np.empty(0, np.float32)
+    if len(path) >= 2:
+        lengths = np.r_[0., np.cumsum(np.linalg.norm(np.diff(path, axis=0), axis=1))]
+        unique = np.r_[True, np.diff(lengths) > 1e-6]
+        path, lengths = path[unique], lengths[unique]
+        if len(path) >= 2:
+            sample = np.r_[np.arange(0., lengths[-1], .25), lengths[-1]]
+            center = np.column_stack([
+                np.interp(sample, lengths, path[:, axis]) for axis in range(3)
+            ]).astype(np.float32)
+            first_step = np.linalg.norm(path[1] - path[0])
+            first_depth_step = float(-path[1, 1] + path[0, 1])
+            origin_offset = max(0., float(-path[0, 1])) * first_step / max(first_depth_step, 1e-6)
+            distances = (sample + origin_offset).astype(np.float32)
+    rails = None
+    if rail_points is not None:
+        rails = np.asarray(rail_points, dtype=np.float32)
+        if rails.ndim != 2 or rails.shape[1] != 3:
+            raise ValueError('Expected Nx3 rail points')
+        rails = rails[np.isfinite(rails).all(axis=1)]
+    details = None
+    if sigma_m is not None:
+        sigma = np.asarray(sigma_m, dtype=np.float64)
+        if sigma.shape != (len(curve),):
+            raise ValueError("Expected one centerline sigma per raw sample")
+        sigma = sigma[:len(path)]
+        if np.isfinite(sigma).all() and np.all(sigma >= 0):
+            details = {"sigma_m": sigma.tolist()}
+    return RailPrediction(center, distances, details=details, rail_points=rails,
+                          max_forward_m=max_forward_m)
 
 
 def detect_obstacles(points, centerline, rail_points=None,
@@ -229,28 +273,8 @@ def detect_obstacles(points, centerline, rail_points=None,
     if not np.isfinite(max_forward_m) or max_forward_m < config.min_forward_m:
         raise ValueError('max_forward_m must be finite and >= min_forward_m')
     xyz = np.asarray(points)
-    curve = np.asarray(centerline, dtype=np.float32)
-    if xyz.ndim != 2 or xyz.shape[1] != 3 or curve.ndim != 2 or curve.shape[1] != 3:
-        raise ValueError('Expected Nx3 points and Mx3 centerline')
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError('Expected Nx3 points')
     xyz = xyz[np.isfinite(xyz).all(axis=1) & (np.einsum('ij,ij->i', xyz, xyz) >= .09)]
-    invalid = np.flatnonzero(~np.isfinite(curve).all(axis=1))
-    path = curve[:int(invalid[0])] if len(invalid) else curve
-    center, distances = np.empty((0, 3), np.float32), np.empty(0, np.float32)
-    if len(path) >= 2:
-        lengths = np.r_[0., np.cumsum(np.linalg.norm(np.diff(path, axis=0), axis=1))]
-        unique = np.r_[True, np.diff(lengths) > 1e-6]
-        path, lengths = path[unique], lengths[unique]
-        if len(path) >= 2:
-            sample = np.r_[np.arange(0., lengths[-1], .25), lengths[-1]]
-            center = np.column_stack([np.interp(sample, lengths, path[:, a]) for a in range(3)]).astype(np.float32)
-            first_step = np.linalg.norm(path[1] - path[0])
-            first_depth_step = float(-path[1, 1] + path[0, 1])
-            origin_offset = max(0., float(-path[0, 1])) * first_step / max(first_depth_step, 1e-6)
-            distances = (sample + origin_offset).astype(np.float32)
-    rails = None
-    if rail_points is not None:
-        rails = np.asarray(rail_points, dtype=np.float32)
-        if rails.ndim != 2 or rails.shape[1] != 3:
-            raise ValueError('Expected Nx3 rail points')
-        rails = rails[np.isfinite(rails).all(axis=1)]
-    return detect_obstacle_points(xyz, RailPrediction(center, distances, rail_points=rails, max_forward_m=max_forward_m), config)
+    prediction = make_rail_prediction(centerline, rail_points, max_forward_m)
+    return detect_obstacle_points(xyz, prediction, config)

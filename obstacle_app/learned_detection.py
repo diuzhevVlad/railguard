@@ -8,6 +8,8 @@ import uuid
 
 import numpy as np
 
+from railpath.detection_config import ObstacleDetectionConfig
+
 from .cloud import xyz_view, FIELD_FORMATS
 from .detection import RailPrediction
 from .scan_detection import ScanDetector
@@ -159,9 +161,12 @@ class LearnedJob:
     bag_id: str
     topic: str
     fingerprint: str
-    train_width_m: float=2.1
-    train_height_m: float=3.0
-    max_forward_m: float=150.0
+    train_width_m: float
+    train_height_m: float
+    max_forward_m: float
+    bayesian_filter_enabled: bool
+    centerline_filter_enabled: bool
+    odometry_enabled: bool
     state: str='queued'
     progress: float=0.
     message: str='Loading RailGuard model and refiner'
@@ -169,24 +174,46 @@ class LearnedJob:
 
 
 class LearnedDetectionManager:
-    def __init__(self, detector_factory=None):
+    def __init__(self, detector_factory=None,
+                 detection_config: ObstacleDetectionConfig = ObstacleDetectionConfig()):
         self.runtime=RailGuardRuntime()
         self.factory=detector_factory
+        self.detection_config=detection_config
         self.jobs={}
         self.detectors={}
         self.lock=threading.Lock()
 
-    def start(self,bag_id,bag,topic,train_width_m=2.1,train_height_m=3.0,max_forward_m=150.):
+    def start(self,bag_id,bag,topic,train_width_m=None,train_height_m=None,
+              max_forward_m=None,bayesian_filter_enabled=None,centerline_filter_enabled=None,
+              odometry_enabled=None):
+        defaults=self.detection_config
+        train_width_m=defaults.obstacle.train_width_m if train_width_m is None else train_width_m
+        train_height_m=defaults.obstacle.train_height_m if train_height_m is None else train_height_m
+        max_forward_m=defaults.max_forward_m if max_forward_m is None else max_forward_m
+        bayesian_filter_enabled=(defaults.bayesian_filter_enabled
+                                 if bayesian_filter_enabled is None else bayesian_filter_enabled)
+        centerline_filter_enabled=(defaults.centerline_filter_enabled
+                                  if centerline_filter_enabled is None else centerline_filter_enabled)
+        odometry_enabled=defaults.odometry_enabled if odometry_enabled is None else odometry_enabled
         fingerprint=source_fingerprint(bag)
         with self.lock:
             for job in self.jobs.values():
-                if (job.bag_id,job.topic,job.fingerprint,job.train_width_m,job.train_height_m,job.max_forward_m)==(bag_id,topic,fingerprint,train_width_m,train_height_m,max_forward_m) and job.state!='failed':
+                identity=(job.bag_id,job.topic,job.fingerprint,job.train_width_m,
+                          job.train_height_m,job.max_forward_m,
+                          job.bayesian_filter_enabled,job.centerline_filter_enabled,
+                          job.odometry_enabled)
+                requested=(bag_id,topic,fingerprint,train_width_m,train_height_m,
+                           max_forward_m,bayesian_filter_enabled,centerline_filter_enabled,
+                           odometry_enabled)
+                if identity==requested and job.state!='failed':
                     return job
             if len(self.jobs)>=16:
                 expired=next((key for key,value in self.jobs.items() if value.state in ('done','failed')),None)
                 if expired:
                     self.jobs.pop(expired);self.detectors.pop(expired,None)
-            job=LearnedJob(uuid.uuid4().hex,bag_id,topic,fingerprint,train_width_m,train_height_m,max_forward_m)
+            job=LearnedJob(uuid.uuid4().hex,bag_id,topic,fingerprint,train_width_m,
+                           train_height_m,max_forward_m,bayesian_filter_enabled,
+                           centerline_filter_enabled,odometry_enabled)
             self.jobs[job.id]=job
         threading.Thread(target=self._load,args=(job,),daemon=True).start()
         return job
@@ -196,12 +223,24 @@ class LearnedDetectionManager:
             job.state='running';job.progress=.1
             if self.factory is None:
                 self.runtime.load()
-                detector=ScanDetector(LearnedRailProvider(self.runtime))
+                detector=ScanDetector(
+                    LearnedRailProvider(self.runtime),
+                    filter_config=self.detection_config.obstacle,
+                    max_forward_m=self.detection_config.max_forward_m,
+                    bayesian_filter_enabled=self.detection_config.bayesian_filter_enabled,
+                    odometry_enabled=self.detection_config.odometry_enabled,
+                    bayesian_config=self.detection_config.bayesian,
+                    centerline_filter_enabled=self.detection_config.centerline_filter_enabled,
+                    centerline_config=self.detection_config.centerline)
                 job.device=self.runtime.device
             else:
                 detector=self.factory(job.bag_id,job.topic);job.device='test'
-            detector.filter_config=replace(detector.filter_config,train_width_m=job.train_width_m,train_height_m=job.train_height_m)
-            detector.max_forward_m=job.max_forward_m
+            config=replace(self.detection_config.obstacle,train_width_m=job.train_width_m,
+                           train_height_m=job.train_height_m)
+            detector.configure(config,job.max_forward_m,job.bayesian_filter_enabled,
+                               job.odometry_enabled,self.detection_config.bayesian,
+                               job.centerline_filter_enabled,
+                               self.detection_config.centerline)
             with self.lock:
                 self.detectors[job.id]=detector
                 job.state='done';job.progress=1.;job.message=f'RailGuard + refiner ready ({job.device})'
