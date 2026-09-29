@@ -5,7 +5,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     environment:
       OBSTACLE_RAIL_DEVICE: cuda
       OBSTACLE_WEIGHTS_DIR: /weights
@@ -16,4 +22,25 @@ services:
       - ./data:/data:ro
       - ./outputs:/output
       - ./weights:/weights:ro
+    restart: unless-stopped
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    network_mode: host
+    ipc: host
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - ./data:/bags:ro
+      - ./railguard/config:/opt/railguard/config:ro
+    command: ["ros2", "launch", "railguard", "railguard.launch.py", "config:=/opt/railguard/config/railguard.yaml"]
     restart: unless-stopped

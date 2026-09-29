@@ -28,4 +28,3 @@ resource path, as described in `../person_standing/README.md`, then include:
 
 Visual and collision geometry use the same mesh. No sensor reflectance model.
 Gazebo and Rerun loading have not been tested in this environment.
-Regenerate with `python3 tools/generate_trump.py`; matplotlib is optional for the preview.

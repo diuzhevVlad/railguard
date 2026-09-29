@@ -30,6 +30,3 @@ For Gazebo, configure the models resource path as described in
 Both visual and collision geometry use the mesh. This is a geometric obstacle,
 with no calibrated reflectance model. Simulator loading and LiDAR returns still
 need testing in Gazebo.
-
-Regenerate with `python3 tools/generate_alien.py`. The mesh generator uses the
-Python standard library; matplotlib optionally produces the preview.

@@ -30,6 +30,3 @@ For Gazebo, set the models resource path following
 Visual and collision geometry share the mesh. No calibrated reflectance model.
 XML, triangle indices, closed component edges, winding and GLB buffer bounds
 were checked locally. Gazebo/Rerun loading and LiDAR returns remain untested.
-
-Regenerate: `python3 tools/generate_photo_person.py`.
-Python standard library for meshes; optional matplotlib for the preview.

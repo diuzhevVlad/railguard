@@ -1,5 +1,4 @@
-# RailGuard: ROS 2 Humble node with the track-centerline model, rosbag2 and RViz2. Build from this repository's root:
-#   docker build -t railguard .
+# RailGuard: ROS 2 Humble node with the track-centerline model, rosbag2 and RViz2.
 FROM ros:humble-ros-base-jammy
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

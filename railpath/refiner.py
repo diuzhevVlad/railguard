@@ -10,7 +10,7 @@ Input: the frozen path model's feature maps and the clothoid decoded from its vo
   4. outputs a curvature correction and a log-sigma per knot. Movable knots sit at a0 + 25 k (k = 1..M) where a0 is the
      last knot with dense vote evidence, so the correction only touches the part the votes do not pin down.
 The mean is the exact integration of the corrected clothoid, the corridor is the linearised propagation of the knot
-sigmas, scaled per band by calib.json (tools/train_refiner.py calib). Training: tools/train_refiner.py.
+sigmas, scaled per band by calib.json produced during training.
 """
 
 import json

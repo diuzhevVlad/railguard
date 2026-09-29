@@ -38,11 +38,7 @@ that world normally. This places the person 10 m along the world's X axis:
 Pose is `x y z roll pitch yaw`, with angles in radians. Adjust Z to the track
 surface height. Use unique names for additional instances.
 
-## Regenerate
-
-Run `python3 tools/generate_person.py` from the repository root. Only the Python
-standard library is required for the mesh; matplotlib optionally creates the
-preview. Geometry/XML have been checked locally; Gazebo is unavailable here,
-so simulator loading and sensor returns have not been tested.
+Geometry/XML have been checked locally; Gazebo is unavailable here, so
+simulator loading and sensor returns have not been tested.
 
 Format reference: https://gazebosim.org/api/sim/7/meshtofuel.html
