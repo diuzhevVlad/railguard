@@ -1,16 +1,27 @@
 """Capture the web renderer's actual meshes; run against the local app."""
 from pathlib import Path
+import argparse
+import shutil
 from playwright.sync_api import sync_playwright
 ROOT=Path(__file__).resolve().parents[1]
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--models',nargs='+')
+parser.add_argument('--url',default='http://localhost:8000')
+args=parser.parse_args()
 output=ROOT/'obstacle_app/static/model-thumbnails'
 output.mkdir(parents=True,exist_ok=True)
 with sync_playwright() as p:
-    browser=p.chromium.launch(headless=True,args=['--no-sandbox','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
+    browser=p.chromium.launch(executable_path=shutil.which('google-chrome'),headless=True,args=['--no-sandbox','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
     page=browser.new_page(viewport={'width':400,'height':350},device_scale_factor=2)
-    page.goto('http://localhost:8000')
+    page.goto(args.url)
     page.wait_for_function('models.length>0')
     page.evaluate("""()=>{document.body.append(renderer.canvas);renderer.canvas.style='position:fixed;left:0;top:0;width:400px;height:350px;z-index:999';renderer.gridCount=0;renderer.mapMode=true;renderer.setPoints(new Float32Array());renderer.setPrediction(null);renderer.controls.selected=false;const clear=renderer.gl.clearColor.bind(renderer.gl);renderer.gl.clearColor=()=>clear(.70,.75,.77,1);}""")
-    for model in page.evaluate('models'):
+    entries=page.evaluate('models')
+    if args.models:
+        missing=set(args.models)-{m['id'] for m in entries}
+        if missing:raise ValueError(f'Models unavailable: {sorted(missing)}')
+        entries=[m for m in entries if m['id'] in args.models]
+    for model in entries:
         page.evaluate("""async id=>{
           const mesh=await api('/api/world-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:id,position:[0,0,0],yaw_deg:0,scale:1})});
           renderer.setMesh(mesh);const bounds=renderer.controls.bounds;

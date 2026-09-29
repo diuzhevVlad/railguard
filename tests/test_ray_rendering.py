@@ -232,8 +232,8 @@ class RayRenderingTests(unittest.TestCase):
 
     def test_every_model_disappears_from_scan_after_train_passes(self):
         root = Path(__file__).resolve().parents[1] / "models"
-        for model in ("person_standing/meshes/person.dae", "person_photo/meshes/person.dae",
-                      "alien_reference/meshes/alien.dae", "trump_stylized/meshes/trump.dae"):
+        for model in ("person_standing/meshes/person.dae", "ITL-RailGuard_alexander/meshes/person.dae",
+                      "alien_reference/meshes/alien.dae"):
             with self.subTest(model=model):
                 vertices, faces = load_collada_mesh(root / model)
                 vertices[:, 1] -= 10

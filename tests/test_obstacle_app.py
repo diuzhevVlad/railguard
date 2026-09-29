@@ -113,8 +113,8 @@ class ObstacleAppTests(unittest.TestCase):
         self.assertGreater(float(a[:, 2].max() - a[:, 2].min()), 1.5)
 
     def test_all_obstacle_meshes_sample_complete_height(self):
-        for relative in ("person_standing/meshes/person.dae", "person_photo/meshes/person.dae",
-                         "alien_reference/meshes/alien.dae", "trump_stylized/meshes/trump.dae"):
+        for relative in ("person_standing/meshes/person.dae", "ITL-RailGuard_alexander/meshes/person.dae",
+                         "alien_reference/meshes/alien.dae"):
             with self.subTest(model=relative):
                 points = sample_collada_surface(MODELS_ROOT / relative, 1000)
                 self.assertEqual(points.shape, (1000, 3))
@@ -532,7 +532,7 @@ class ObstacleAppTests(unittest.TestCase):
             fake = FakeBackend()
             client = TestClient(create_app(fake, data, output, MODEL))
             self.assertEqual({m["id"] for m in client.get("/api/models").json()},
-                             {"person_standing", "person_photo", "alien_reference", "trump_stylized",
+                             {"person_standing", "ITL-RailGuard_alexander", "ITL-RailGuard_dmitry", "ITL-RailGuard_leonid", "ITL-RailGuard_vasily", "ITL-RailGuard_vladislav", "alien_reference",
                               "box_square", "box_long_thin", "wire_hanging", "niva_car"})
             response = client.post("/api/jobs", json={"bag_id": "source/sample",
                 "topic": "/lidar_points", "obstacles": [

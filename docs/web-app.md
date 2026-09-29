@@ -135,8 +135,8 @@ Edit **World X/Y/Z**, **Yaw**, and **Scale** to refine placement, including
 positions between observed surfaces. These are unrestricted world coordinates,
 not rail offsets. Yaw starts at 0 degrees around world Z and scale starts at 1.
 
-Eight models are available as clickable mesh thumbnails: Niva car, two boxes,
-standing person, person from photo, alien, stylized Donald Trump, and hanging wire.
+Models are available as clickable mesh thumbnails: Niva car, two boxes,
+standing person, named ITL-RailGuard people, alien, and hanging wire.
 The Niva is a simplified original mesh based on the reference photograph, with
 approximate dimensions; its windows are opaque to the current LiDAR renderer. Ordinary models use their
 bottom-center anchor. A wire attaches by its top and extends downward; click a
