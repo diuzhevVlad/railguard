@@ -46,6 +46,13 @@ Visualization Manager:
       Color Transformer: FlatColor
       Color: 255; 160; 60
       Decay Time: 0
+    - Class: rviz_default_plugins/Marker
+      Name: Nearest obstacle
+      Enabled: true
+      Topic:
+        Value: /railguard/nearest_obstacle
+        Reliability Policy: Reliable
+        Depth: 1
     - Class: rviz_default_plugins/Path
       Name: Centerline
       Enabled: true

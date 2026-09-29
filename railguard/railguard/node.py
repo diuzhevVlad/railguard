@@ -8,6 +8,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Bool, Float32
+from visualization_msgs.msg import Marker
 
 from railpath import RailPath
 from railpath.bag_io import unpack
@@ -32,6 +33,7 @@ class RailGuardNode(Node):
         self.pub_obstacles = self.create_publisher(PointCloud2, '/railguard/obstacles', 1)
         self.pub_detected = self.create_publisher(Bool, '/railguard/obstacle_detected', 1)
         self.pub_distance = self.create_publisher(Float32, '/railguard/obstacle_distance', 1)
+        self.pub_nearest = self.create_publisher(Marker, '/railguard/nearest_obstacle', 1)
         # depth 1: while a scan is processed only the newest one waits, so the node never falls behind the sensor
         self.create_subscription(PointCloud2, topic, self.on_cloud, QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.get_logger().info(f'listening on {topic}')
@@ -52,6 +54,20 @@ class RailGuardNode(Node):
         self.pub_obstacles.publish(point_cloud2.create_cloud_xyz32(msg.header, detection.points))
         self.pub_detected.publish(Bool(data=detection.detected))
         self.pub_distance.publish(Float32(data=detection.distance_m if detection.detected else float('nan')))
+        nearest = Marker()
+        nearest.header = msg.header
+        nearest.ns = 'nearest_obstacle'
+        nearest.id = 0
+        if detection.nearest_point is None:
+            nearest.action = Marker.DELETE
+        else:
+            nearest.type = Marker.SPHERE
+            nearest.action = Marker.ADD
+            nearest.pose.position.x, nearest.pose.position.y, nearest.pose.position.z = map(float, detection.nearest_point)
+            nearest.pose.orientation.w = 1.0
+            nearest.scale.x = nearest.scale.y = nearest.scale.z = 0.5
+            nearest.color.r, nearest.color.g, nearest.color.b, nearest.color.a = 1.0, 1.0, 0.0, 1.0
+        self.pub_nearest.publish(nearest)
 
 
 def main():

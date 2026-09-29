@@ -130,6 +130,7 @@ class ObstacleDetection:
     points: np.ndarray
     rejected_points: np.ndarray | None = None
     excluded_rail_count: int = 0
+    nearest_point: np.ndarray | None = None
 
 
 def envelope_candidates(xyz: np.ndarray, prediction: RailPrediction,
@@ -212,8 +213,15 @@ def detect_obstacle_points(xyz: np.ndarray, prediction: RailPrediction,
     else:
         keep[active] = filter_obstacle_candidates(candidates[active], filter_config)
     points = candidates[keep]
-    distance = float(np.min(prediction.distance_along_m[nearest[keep]])) if len(points) else None
-    return ObstacleDetection(bool(len(points)), len(points), distance, points, candidates[~keep & ~is_rail], int(is_rail.sum()))
+    distance = None
+    nearest_point = None
+    if len(points):
+        distances = prediction.distance_along_m[nearest[keep]]
+        closest = int(np.argmin(distances))
+        distance = float(distances[closest])
+        nearest_point = points[closest].copy()
+    return ObstacleDetection(bool(len(points)), len(points), distance, points,
+                             candidates[~keep & ~is_rail], int(is_rail.sum()), nearest_point)
 
 
 
