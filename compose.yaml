@@ -41,6 +41,7 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ./data:/bags:ro
+      - ./outputs:/bags/outputs:ro
       - ./railguard/config:/opt/railguard/config:ro
     command: ["ros2", "launch", "railguard", "railguard.launch.py", "config:=/opt/railguard/config/railguard.yaml"]
     restart: unless-stopped
