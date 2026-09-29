@@ -1,4 +1,4 @@
-# ITL-RailGuard_alexander
+# Photo-inspired person
 
 Simplified procedural interpretation of the supplied photo: brown cap, gray
 T-shirt, beige shorts, crossbody bag, bottle, white socks and sneakers.
@@ -13,7 +13,7 @@ Geometry comprises overlapping closed components, not one fused surface.
 Open from the repository root:
 
 ```bash
-rerun models/ITL-RailGuard_alexander/meshes/person.glb
+rerun models/person_photo/meshes/person.glb
 ```
 
 For Gazebo, set the models resource path following
@@ -21,7 +21,7 @@ For Gazebo, set the models resource path following
 
 ```xml
 <include>
-  <uri>model://ITL-RailGuard_alexander</uri>
+  <uri>model://person_photo</uri>
   <name>photo_person_obstacle</name>
   <pose>10 0 0 0 0 0</pose>
 </include>
