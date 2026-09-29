@@ -16,7 +16,11 @@ ENV PYTHONPATH=/app RAILGUARD_DEVICE=auto RAILGUARD_CPU_THREADS=4
 COPY obstacle_app /app/obstacle_app
 COPY models/niva_car/meshes/niva.dae /app/models/niva_car/meshes/niva.dae
 COPY models/person_standing/meshes/person.dae /app/models/person_standing/meshes/person.dae
-COPY models/person_photo/meshes/person.dae /app/models/person_photo/meshes/person.dae
+COPY models/ITL-RailGuard_alexander/meshes/person.dae /app/models/ITL-RailGuard_alexander/meshes/person.dae
+COPY models/ITL-RailGuard_dmitry/meshes/person.dae /app/models/ITL-RailGuard_dmitry/meshes/person.dae
+COPY models/ITL-RailGuard_leonid/meshes/person.dae /app/models/ITL-RailGuard_leonid/meshes/person.dae
+COPY models/ITL-RailGuard_vasily/meshes/person.dae /app/models/ITL-RailGuard_vasily/meshes/person.dae
+COPY models/ITL-RailGuard_vladislav/meshes/person.dae /app/models/ITL-RailGuard_vladislav/meshes/person.dae
 COPY models/alien_reference/meshes/alien.dae /app/models/alien_reference/meshes/alien.dae
 COPY models/trump_stylized/meshes/trump.dae /app/models/trump_stylized/meshes/trump.dae
 COPY models/box_square/meshes/box.dae /app/models/box_square/meshes/box.dae

@@ -39,7 +39,11 @@ MODEL_PATH = Path(os.environ.get("OBSTACLE_MODEL_PATH", ROOT / "models/person_st
 MODEL_FILES = {
     "niva_car": ("Niva car", "niva_car/meshes/niva.dae"),
     "person_standing": ("Standing person", "person_standing/meshes/person.dae"),
-    "person_photo": ("Person from photo", "person_photo/meshes/person.dae"),
+    "ITL-RailGuard_alexander": ("ITL-RailGuard_alexander", "ITL-RailGuard_alexander/meshes/person.dae"),
+    "ITL-RailGuard_dmitry": ("ITL-RailGuard_dmitry", "ITL-RailGuard_dmitry/meshes/person.dae"),
+    "ITL-RailGuard_leonid": ("ITL-RailGuard_leonid", "ITL-RailGuard_leonid/meshes/person.dae"),
+    "ITL-RailGuard_vasily": ("ITL-RailGuard_vasily", "ITL-RailGuard_vasily/meshes/person.dae"),
+    "ITL-RailGuard_vladislav": ("ITL-RailGuard_vladislav", "ITL-RailGuard_vladislav/meshes/person.dae"),
     "alien_reference": ("Alien", "alien_reference/meshes/alien.dae"),
     "trump_stylized": ("Stylized Donald Trump", "trump_stylized/meshes/trump.dae"),
     "box_square": ("Square box", "box_square/meshes/box.dae"),

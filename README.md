@@ -282,3 +282,15 @@ decode, and the scene unrolled into the curve's frame.
 Generate six new bags using the app renderer, with people and varied-size boxes
 at 5, 20, 35, … seconds. See [dataset generation](docs/test-dataset.md) for
 sampling configuration, external-disk output, compression and replay commands.
+
+## Named person meshes
+
+`models/ITL-RailGuard_<name>/` contains Alexander (renamed from `person_photo`),
+Dmitry, Leonid, Vasily and Vladislav. Each has a colored COLLADA mesh for the app
+and Gazebo, a GLB for Rerun, an SDF model and a rendered preview. These are
+photo-inspired procedural approximations, not measured 3D reconstructions.
+The four new models use a chosen height of 1.80 m; Alexander keeps his existing
+geometry and scale. All five are available in the web obstacle picker.
+
+Regenerate the four new models with `python3 tools/generate_itl_people.py`.
+See each model's README for its source photo and coordinate conventions.

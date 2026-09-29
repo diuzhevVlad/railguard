@@ -4,7 +4,7 @@ import math
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL = ROOT / 'models/person_photo'
+MODEL = ROOT / 'models/ITL-RailGuard_alexander'
 vertices, faces = [], []
 
 
@@ -313,6 +313,6 @@ if __name__ == '__main__':
                    xlabel='X (m)', ylabel='Y (m)', zlabel='Z (m)')
             ax.set_box_aspect((.8, .8, 1.9))
             ax.view_init(elev=12, azim=azimuth)
-        fig.suptitle('Photo-inspired person • simplified procedural mesh')
+        fig.suptitle('Alexander • simplified procedural mesh')
         fig.tight_layout()
         fig.savefig(MODEL / 'preview.png', dpi=150)
