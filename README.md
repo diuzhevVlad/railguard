@@ -35,19 +35,19 @@ docker compose logs -f node
 
 ```sh
 docker compose exec node bash -ic 'rviz2 -d /opt/railguard/ws/install/railguard/share/railguard/rviz/railguard.rviz'
-docker compose exec node bash -ic 'ros2 bag play /bags/doubleT_obstacle'
+docker compose exec node bash -ic 'ros2 bag play /bags/doubleT_platform'
 ```
 
 ### Выходные топики ноды
 
-| Топик | Тип | Содержимое |
-| --- | --- | --- |
-| `/railguard/centerline` | `nav_msgs/msg/Path` | Предсказанная ось пути. |
-| `/railguard/rails` | `sensor_msgs/msg/PointCloud2` | Точки рельсов. |
-| `/railguard/obstacles` | `sensor_msgs/msg/PointCloud2` | Точки обнаруженных препятствий. |
-| `/railguard/obstacle_detected` | `std_msgs/msg/Bool` | `true`, если препятствие обнаружено. |
-| `/railguard/obstacle_distance` | `std_msgs/msg/Float32` | Расстояние до ближайшего препятствия вдоль пути в метрах; `NaN`, если его нет. |
-| `/railguard/nearest_obstacle` | `visualization_msgs/msg/Marker` | Ближайшая точка — жёлтая сфера в RViz; удаляется, когда препятствий нет. |
+| Топик                       | Тип                            | Содержимое                                                                                                                       |
+| -------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/railguard/centerline`        | `nav_msgs/msg/Path`             | Предсказанная ось пути.                                                                                                |
+| `/railguard/rails`             | `sensor_msgs/msg/PointCloud2`   | Точки рельсов.                                                                                                                 |
+| `/railguard/obstacles`         | `sensor_msgs/msg/PointCloud2`   | Точки обнаруженных препятствий.                                                                                |
+| `/railguard/obstacle_detected` | `std_msgs/msg/Bool`             | `true`, если препятствие обнаружено.                                                                            |
+| `/railguard/obstacle_distance` | `std_msgs/msg/Float32`          | Расстояние до ближайшего препятствия вдоль пути в метрах;`NaN`, если его нет. |
+| `/railguard/nearest_obstacle`  | `visualization_msgs/msg/Marker` | Ближайшая точка — жёлтая сфера в RViz; удаляется, когда препятствий нет.            |
 
 Топик `input_topic` в [railguard.yaml](railguard/config/railguard.yaml) должен совпадать с топиком облака точек в bag. Для `doubleT_obstacle` установите в RViz `Fixed Frame: lidar_livox` и соответствующий топик лидарных данных. После изменения YAML примените параметры без пересборки:
 
