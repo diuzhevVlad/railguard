@@ -22,7 +22,6 @@ COPY models/ITL-RailGuard_leonid/meshes/person.dae /app/models/ITL-RailGuard_leo
 COPY models/ITL-RailGuard_vasily/meshes/person.dae /app/models/ITL-RailGuard_vasily/meshes/person.dae
 COPY models/ITL-RailGuard_vladislav/meshes/person.dae /app/models/ITL-RailGuard_vladislav/meshes/person.dae
 COPY models/alien_reference/meshes/alien.dae /app/models/alien_reference/meshes/alien.dae
-COPY models/trump_stylized/meshes/trump.dae /app/models/trump_stylized/meshes/trump.dae
 COPY models/box_square/meshes/box.dae /app/models/box_square/meshes/box.dae
 COPY models/box_long_thin/meshes/box.dae /app/models/box_long_thin/meshes/box.dae
 COPY models/wire_hanging/meshes/wire.dae /app/models/wire_hanging/meshes/wire.dae

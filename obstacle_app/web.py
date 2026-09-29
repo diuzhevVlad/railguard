@@ -45,7 +45,6 @@ MODEL_FILES = {
     "ITL-RailGuard_vasily": ("ITL-RailGuard_vasily", "ITL-RailGuard_vasily/meshes/person.dae"),
     "ITL-RailGuard_vladislav": ("ITL-RailGuard_vladislav", "ITL-RailGuard_vladislav/meshes/person.dae"),
     "alien_reference": ("Alien", "alien_reference/meshes/alien.dae"),
-    "trump_stylized": ("Stylized Donald Trump", "trump_stylized/meshes/trump.dae"),
     "box_square": ("Square box", "box_square/meshes/box.dae"),
     "box_long_thin": ("Long thin box", "box_long_thin/meshes/box.dae"),
     "wire_hanging": ("Hanging wire", "wire_hanging/meshes/wire.dae"),
