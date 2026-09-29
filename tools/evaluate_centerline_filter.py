@@ -256,6 +256,7 @@ def main() -> None:
         "--centerline-measurement-variance-growth-m2-per-m", type=float)
     parser.add_argument("--centerline-max-measurement-variance-m2", type=float)
     parser.add_argument("--centerline-max-correspondence-distance-m", type=float)
+    parser.add_argument("--centerline-association-fade-start-ratio", type=float)
     parser.add_argument("--prediction-cache", type=Path)
     parser.add_argument("--output", type=Path,
                         default=Path("outputs/centerline_filter_evaluation.json"))
@@ -271,6 +272,8 @@ def main() -> None:
                 args.centerline_max_measurement_variance_m2,
             "max_correspondence_distance_m":
                 args.centerline_max_correspondence_distance_m,
+            "association_fade_start_ratio":
+                args.centerline_association_fade_start_ratio,
         }.items() if value is not None
     }
     if centerline_overrides:

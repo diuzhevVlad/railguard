@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 import numpy as np
 
@@ -96,6 +97,19 @@ class CenterlineFilterTests(unittest.TestCase):
         self.assertAlmostEqual(result[-1], offset[-1], delta=.01)
 
 
+    def test_earlier_association_fade_follows_large_innovation_more(self):
+        default = BayesianCenterlineFilter(self.config)
+        default.update(prediction())
+        default_result = default.update(prediction(1.0)).prediction.center[:, 0]
+
+        robust = BayesianCenterlineFilter(replace(
+            self.config, association_fade_start_ratio=0.0))
+        robust.update(prediction())
+        robust_result = robust.update(prediction(1.0)).prediction.center[:, 0]
+
+        self.assertTrue(np.all(robust_result > default_result))
+        self.assertTrue(np.all(robust_result < 1.0))
+
     def test_pipeline_is_optional_and_exposes_filtered_result(self):
         points = np.empty((0, 3), dtype=np.float32)
         spatial = ObstacleFilterConfig(min_cluster_points=1)
@@ -116,6 +130,8 @@ class CenterlineFilterTests(unittest.TestCase):
                        {"measurement_variance_growth_m2_per_m": -1},
                        {"max_measurement_variance_m2": .01},
                        {"use_model_uncertainty": 1},
+                       {"association_fade_start_ratio": -0.1},
+                       {"association_fade_start_ratio": 1.0},
                        {"max_correspondence_distance_m": 0}):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 CenterlineFilterConfig(**values)

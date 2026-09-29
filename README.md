@@ -243,6 +243,7 @@ it at startup, so restart after editing. The web image copies this file during i
 | `centerline_filter_max_measurement_variance_m2` | `0.50` | cap on distance/model-derived measurement variance |
 | `centerline_filter_use_model_uncertainty` | `true` | use calibrated per-distance model sigma when available |
 | `centerline_filter_max_correspondence_distance_m` | `2.0` | association gate between predicted and measured samples             |
+| `centerline_filter_association_fade_start_ratio` | `0.5` | fraction of the association gate where prior influence starts fading |
 | `occupancy_grid_resolution_m`   | `1.0`   | spacing of probability samples along the centreline                           |
 | `occupancy_prior_probability`   | `0.08`  | starting probability for new or unmatched cells                              |
 | `occupancy_point_hit_probability` | `0.40` | independent occupied evidence contributed by each retained obstacle point     |

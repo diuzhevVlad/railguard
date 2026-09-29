@@ -25,6 +25,7 @@ class CenterlineFilterConfig:
     max_measurement_variance_m2: float = 0.50
     use_model_uncertainty: bool = True
     max_correspondence_distance_m: float = 2.0
+    association_fade_start_ratio: float = 0.5
 
     def __post_init__(self) -> None:
         for name in ("initial_variance_m2", "measurement_variance_m2",
@@ -43,6 +44,10 @@ class CenterlineFilterConfig:
         if self.max_measurement_variance_m2 < self.measurement_variance_m2:
             raise ValueError(
                 "max_measurement_variance_m2 must be >= measurement_variance_m2")
+        if (not np.isfinite(self.association_fade_start_ratio)
+                or not 0 <= self.association_fade_start_ratio < 1):
+            raise ValueError(
+                "association_fade_start_ratio must be in [0, 1)")
         if not isinstance(self.use_model_uncertainty, bool):
             raise ValueError("use_model_uncertainty must be a boolean")
 
@@ -135,7 +140,7 @@ class BayesianCenterlineFilter:
             gain = predicted_variance / (
                 predicted_variance + measurement_variance)
             gate = self.config.max_correspondence_distance_m
-            fade_start = 0.5 * gate
+            fade_start = self.config.association_fade_start_ratio * gate
             transition = np.clip(
                 (separation - fade_start) / max(gate - fade_start, 1e-9), 0., 1.)
             association_weight = 1. - transition ** 2 * (3. - 2. * transition)

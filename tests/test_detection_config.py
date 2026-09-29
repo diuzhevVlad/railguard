@@ -30,6 +30,7 @@ class DetectionConfigTests(unittest.TestCase):
         self.assertEqual(config.centerline.max_measurement_variance_m2, 0.50)
         self.assertTrue(config.centerline.use_model_uncertainty)
         self.assertEqual(config.centerline.max_correspondence_distance_m, 2.0)
+        self.assertEqual(config.centerline.association_fade_start_ratio, 0.5)
         self.assertEqual(config.bayesian.immediate_near_distance_m, 50.0)
         self.assertEqual(config.bayesian.immediate_near_probability, 0.75)
         self.assertEqual(config.bayesian.immediate_far_distance_m, 110.0)

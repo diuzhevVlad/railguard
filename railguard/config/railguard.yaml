@@ -28,6 +28,7 @@ railguard_node:
     centerline_filter_max_measurement_variance_m2: 0.50
     centerline_filter_use_model_uncertainty: true
     centerline_filter_max_correspondence_distance_m: 2.0
+    centerline_filter_association_fade_start_ratio: 0.5
     occupancy_grid_resolution_m: 1.0
     occupancy_prior_probability: 0.08
     occupancy_point_hit_probability: 0.4      # applied once per obstacle point (capped below)

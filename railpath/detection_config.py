@@ -43,6 +43,8 @@ _CENTERLINE_PARAMETERS = {
     "centerline_filter_use_model_uncertainty": "use_model_uncertainty",
     "centerline_filter_max_correspondence_distance_m":
         "max_correspondence_distance_m",
+    "centerline_filter_association_fade_start_ratio":
+        "association_fade_start_ratio",
 }
 
 
