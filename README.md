@@ -57,3 +57,7 @@ docker compose start node
 ```
 
 Остановить сервисы: `docker compose stop web node`.
+
+## Модели препятствий
+
+В приложении доступны модели ITL-RailGuard: Alexander (бывшая `person_photo`), Dmitry, Leonid, Vasily и Vladislav. Цветные меши, SDF и превью находятся в `models/ITL-RailGuard_<name>/`. Модель Trump удалена.
