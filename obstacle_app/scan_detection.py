@@ -93,6 +93,7 @@ class ScanDetector:
                     "lookahead_limit_m": prediction.max_forward_m,
                     "bayesian_filter_enabled": self.bayesian_filter_enabled,
                     "centerline_filter_enabled": self.centerline_filter_enabled,
+                    "centerline_filter_algorithm": self.centerline_config.algorithm,
                     "odometry_enabled": self.odometry_enabled,
                     "sigma_max_checked_m": max(checked_sigma) if checked_sigma else None,
                     "checked_forward_m": min(prediction.max_forward_m or float('inf'), float(np.max(-prediction.center[:, 1]))) if len(prediction.center) else 0.})

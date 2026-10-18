@@ -1,4 +1,4 @@
-"""Evaluate the 2x2 occupancy/centerline filter matrix on generated bags."""
+"""Evaluate occupancy and rolling-NURBS centerline filtering on generated bags."""
 from __future__ import annotations
 
 import argparse
@@ -18,6 +18,7 @@ from obstacle_app.prediction_cache import (load_prediction_cache,
                                            save_prediction_cache)
 from railpath.detection_config import load_obstacle_detection_config
 from railpath.centerline_filter import BayesianCenterlineFilter
+from railpath.nurbs_centerline_filter import RollingNURBSCenterlineFilter
 from railpath.obstacle_filter import detect_obstacle_points
 from railpath.occupancy_filter import BayesianObstacleFilter
 from tools.evaluate_centerline_filter import (
@@ -32,6 +33,10 @@ CONFIGURATIONS = {
     "occupancy_only": (True, False),
     "centerline_only": (False, True),
     "occupancy_and_centerline": (True, True),
+}
+LEGACY_CONFIGURATIONS = {
+    "legacy_centerline_only": (False, True),
+    "legacy_occupancy_and_centerline": (True, True),
 }
 
 
@@ -58,7 +63,7 @@ def detection_result(spatial, detected: bool, occupancy=None) -> dict:
 
 
 
-def distance_bin_metrics(frames: list[dict]) -> dict:
+def distance_bin_metrics(frames: list[dict], names=CONFIGURATIONS) -> dict:
     result = {}
     for bin_name in ("0-30m", "30-80m", "80m+", "unknown"):
         selected = [
@@ -71,7 +76,7 @@ def distance_bin_metrics(frames: list[dict]) -> dict:
                 "recall": {
                     name: sum(frame["configurations"][name]["detected"]
                               for frame in selected) / len(selected)
-                    for name in CONFIGURATIONS
+                    for name in names
                 },
             }
     return result
@@ -85,6 +90,7 @@ def evaluate_bag(
     topic_override: str | None,
     weights: Path,
     prediction_cache: Path | None,
+    compare_legacy: bool = False,
 ) -> tuple[dict, list[dict], dict[str, list[np.ndarray]]]:
     scenario = json.loads(
         (bag / "obstacle_scenario.json").read_text(encoding="utf-8"))
@@ -98,9 +104,16 @@ def evaluate_bag(
     if poses.shape != (len(timestamps), 4, 4):
         raise ValueError(f"Invalid labeled pose sequence in {bag}")
 
-    centerline_filter = BayesianCenterlineFilter(config.centerline)
+    filter_class = (RollingNURBSCenterlineFilter
+                    if config.centerline.algorithm == "rolling_nurbs"
+                    else BayesianCenterlineFilter)
+    centerline_filter = filter_class(config.centerline)
+    legacy_filter = BayesianCenterlineFilter(config.centerline) if compare_legacy else None
     raw_occupancy_filter = BayesianObstacleFilter(config.bayesian)
     filtered_occupancy_filter = BayesianObstacleFilter(config.bayesian)
+    legacy_occupancy_filter = (BayesianObstacleFilter(config.bayesian)
+                               if compare_legacy else None)
+    names = {**CONFIGURATIONS, **LEGACY_CONFIGURATIONS} if compare_legacy else CONFIGURATIONS
     last_timestamp_ns = None
     cached = (
         load_prediction_cache(prediction_cache, bag, topic, weights)
@@ -116,6 +129,8 @@ def evaluate_bag(
         ("raw_3d", "filtered_3d", "raw_xy", "filtered_xy",
          "raw_jitter", "filtered_jitter")
     }
+    if compare_legacy:
+        errors.update(legacy_3d=[], legacy_xy=[])
     previous_raw = previous_filtered = None
 
     with AnyReader([bag], default_typestore=TYPESTORE) as reader:
@@ -156,15 +171,25 @@ def evaluate_bag(
                     centerline_filter.reset()
                     raw_occupancy_filter.reset()
                     filtered_occupancy_filter.reset()
+                    if compare_legacy:
+                        legacy_filter.reset()
+                        legacy_occupancy_filter.reset()
             last_timestamp_ns = timestamp_ns
             pose = poses[index]
             filtered_estimate = centerline_filter.update(
-                prediction, pose, odometry_used=True)
+                prediction, pose, odometry_used=True,
+                timestamp_ns=timestamp_ns)
             filtered_prediction = filtered_estimate.prediction
+            legacy_prediction = (legacy_filter.update(
+                prediction, pose, odometry_used=True).prediction
+                if compare_legacy else None)
             raw_detection = detect_obstacle_points(
                 xyz, prediction, config.obstacle)
             filtered_detection = detect_obstacle_points(
                 xyz, filtered_prediction, config.obstacle)
+            legacy_detection = (detect_obstacle_points(
+                xyz, legacy_prediction, config.obstacle)
+                if compare_legacy else None)
             raw_occupancy = raw_occupancy_filter.update(
                 prediction, raw_detection.points, pose,
                 min_distance_m=config.obstacle.min_forward_m,
@@ -177,10 +202,18 @@ def evaluate_bag(
                 max_distance_m=filtered_prediction.max_forward_m,
                 odometry_used=True,
             )
+            legacy_occupancy = (legacy_occupancy_filter.update(
+                legacy_prediction, legacy_detection.points, pose,
+                min_distance_m=config.obstacle.min_forward_m,
+                max_distance_m=legacy_prediction.max_forward_m,
+                odometry_used=True) if compare_legacy else None)
             raw_confirmed = occupancy_detected(
                 raw_detection, raw_occupancy, config.bayesian)
             filtered_confirmed = occupancy_detected(
                 filtered_detection, filtered_occupancy, config.bayesian)
+            legacy_confirmed = (occupancy_detected(
+                legacy_detection, legacy_occupancy, config.bayesian)
+                if compare_legacy else None)
 
             ground_truth = gt_predictor.predict(
                 poses[index], config.max_forward_m)
@@ -192,6 +225,11 @@ def evaluate_bag(
             errors["filtered_3d"].append(filtered_error)
             errors["raw_xy"].append(raw_lateral)
             errors["filtered_xy"].append(filtered_lateral)
+            if compare_legacy:
+                legacy_error, legacy_lateral = centerline_errors(
+                    legacy_prediction, ground_truth)
+                errors["legacy_3d"].append(legacy_error)
+                errors["legacy_xy"].append(legacy_lateral)
             if index:
                 raw_frame_jitter = temporal_jitter(
                     prediction, previous_raw, poses[index], poses[index - 1])
@@ -214,6 +252,13 @@ def evaluate_bag(
                 "occupancy_and_centerline": detection_result(
                     filtered_detection, filtered_confirmed, filtered_occupancy),
             }
+            if compare_legacy:
+                configuration_results.update({
+                    "legacy_centerline_only": detection_result(
+                        legacy_detection, legacy_detection.detected),
+                    "legacy_occupancy_and_centerline": detection_result(
+                        legacy_detection, legacy_confirmed, legacy_occupancy),
+                })
             frames.append({
                 "timestamp_ns": timestamp_ns,
                 "label": label,
@@ -263,9 +308,9 @@ def evaluate_bag(
                 [frame["configurations"][name]["detected"]
                  for frame in frames],
             )
-            for name in CONFIGURATIONS
+            for name in names
         },
-        "distance_bins": distance_bin_metrics(frames),
+        "distance_bins": distance_bin_metrics(frames, names),
         "centerline_temporal_jitter": {
             "raw_3d": error_metrics(errors["raw_jitter"]),
             "filtered_3d": error_metrics(errors["filtered_jitter"]),
@@ -275,6 +320,9 @@ def evaluate_bag(
             "filtered_3d": error_metrics(errors["filtered_3d"]),
             "raw_xy": error_metrics(errors["raw_xy"]),
             "filtered_xy": error_metrics(errors["filtered_xy"]),
+            **({"legacy_3d": error_metrics(errors["legacy_3d"]),
+                "legacy_xy": error_metrics(errors["legacy_xy"])}
+               if compare_legacy else {}),
         },
     }
     return summary, frames, errors
@@ -291,12 +339,17 @@ def main() -> None:
     parser.add_argument("--topic")
     parser.add_argument("--min-points", type=int)
     parser.add_argument("--prediction-cache", type=Path)
+    parser.add_argument("--compare-legacy", action="store_true",
+                        help="Also run the previous pointwise Kalman filter on the same scans")
     parser.add_argument(
         "--output", type=Path,
         default=Path("outputs/filter_matrix_evaluation.json"))
     args = parser.parse_args()
 
     config = load_obstacle_detection_config(args.config)
+    if args.compare_legacy and config.centerline.algorithm != "rolling_nurbs":
+        parser.error("--compare-legacy requires centerline_filter_algorithm=rolling_nurbs")
+    names = {**CONFIGURATIONS, **LEGACY_CONFIGURATIONS} if args.compare_legacy else CONFIGURATIONS
     min_points = args.min_points or config.obstacle.min_cluster_points
     runtime = RailGuardRuntime(args.weights, args.device)
     summaries = []
@@ -306,10 +359,12 @@ def main() -> None:
         ("raw_3d", "filtered_3d", "raw_xy", "filtered_xy",
          "raw_jitter", "filtered_jitter")
     }
+    if args.compare_legacy:
+        combined_errors.update(legacy_3d=[], legacy_xy=[])
     for bag in args.bags:
         summary, frames, errors = evaluate_bag(
             bag, runtime, config, min_points, args.topic, args.weights,
-            args.prediction_cache)
+            args.prediction_cache, args.compare_legacy)
         summaries.append(summary)
         all_frames.extend(
             {"bag": bag.name, **frame} for frame in frames)
@@ -323,7 +378,7 @@ def main() -> None:
             [frame["configurations"][name]["detected"]
              for frame in all_frames],
         )
-        for name in CONFIGURATIONS
+        for name in names
     }
     baseline = configuration_metrics["no_filters"]
     raw_gt = error_metrics(combined_errors["raw_3d"])
@@ -335,9 +390,12 @@ def main() -> None:
             name: {
                 "occupancy_filter_enabled": occupancy,
                 "centerline_filter_enabled": centerline,
+                "centerline_filter_algorithm": (
+                    "legacy_pointwise" if name.startswith("legacy_") else
+                    config.centerline.algorithm if centerline else None),
                 "replayed_kiss_icp_enabled": occupancy or centerline,
             }
-            for name, (occupancy, centerline) in CONFIGURATIONS.items()
+            for name, (occupancy, centerline) in names.items()
         },
         "comparison_control": (
             "All configurations use identical scans and cached RailPredictions. "
@@ -375,6 +433,9 @@ def main() -> None:
                 "filtered_3d": filtered_gt,
                 "raw_xy": error_metrics(combined_errors["raw_xy"]),
                 "filtered_xy": error_metrics(combined_errors["filtered_xy"]),
+                **({"legacy_3d": error_metrics(combined_errors["legacy_3d"]),
+                    "legacy_xy": error_metrics(combined_errors["legacy_xy"])}
+                   if args.compare_legacy else {}),
                 "rmse_delta_m": (
                     filtered_gt["rmse_m"] - raw_gt["rmse_m"]
                     if raw_gt["rmse_m"] is not None else None),
@@ -382,6 +443,22 @@ def main() -> None:
         },
         "frame_results": all_frames,
     }
+    if args.compare_legacy:
+        gt = result["combined"]["centerline_gt"]
+        result["combined"]["nurbs_vs_legacy"] = {
+            "centerline_only": {
+                metric: configuration_metrics["centerline_only"][metric]
+                - configuration_metrics["legacy_centerline_only"][metric]
+                for metric in ("precision", "recall")
+            },
+            "occupancy_and_centerline": {
+                metric: configuration_metrics["occupancy_and_centerline"][metric]
+                - configuration_metrics["legacy_occupancy_and_centerline"][metric]
+                for metric in ("precision", "recall")
+            },
+            "centerline_rmse_delta_m": (
+                gt["filtered_3d"]["rmse_m"] - gt["legacy_3d"]["rmse_m"]),
+        }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(result, indent=2) + "\n", encoding="utf-8")

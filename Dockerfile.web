@@ -12,6 +12,7 @@ COPY requirements-web.txt /app/
 RUN pip install --no-cache-dir -r requirements-web.txt
 
 COPY railpath /app/railpath
+COPY nurbs_filter /app/nurbs_filter
 ENV PYTHONPATH=/app RAILGUARD_DEVICE=auto RAILGUARD_CPU_THREADS=4
 COPY obstacle_app /app/obstacle_app
 COPY railguard/config/railguard.yaml /app/railguard/config/railguard.yaml

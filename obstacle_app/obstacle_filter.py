@@ -10,3 +10,4 @@ from railpath.occupancy_filter import (
 from railpath.centerline_filter import (
     CenterlineFilterConfig, CenterlineEstimate, BayesianCenterlineFilter,
 )
+from railpath.nurbs_centerline_filter import RollingNURBSCenterlineFilter

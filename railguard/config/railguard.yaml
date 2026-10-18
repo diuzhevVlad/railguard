@@ -19,16 +19,38 @@ railguard_node:
     # cells and the filtered centerline into the current local LiDAR frame.
     bayesian_filter_enabled: false
     centerline_filter_enabled: false
+    centerline_filter_algorithm: rolling_nurbs    # rolling_nurbs or legacy_pointwise
     odometry_enabled: false
-    # Kalman-style centerline state: scalar isotropic variance per XYZ sample.
+    # Pointwise settings below remain for legacy comparisons.
     centerline_filter_initial_variance_m2: 0.25
-    centerline_filter_process_variance_m2: 0.02
-    centerline_filter_measurement_variance_m2: 0.09
+    centerline_filter_process_variance_m2: 0.01
+    centerline_filter_measurement_variance_m2: 0.04
     centerline_filter_measurement_variance_growth_m2_per_m: 0.0
     centerline_filter_max_measurement_variance_m2: 0.50
     centerline_filter_use_model_uncertainty: true
     centerline_filter_max_correspondence_distance_m: 2.0
     centerline_filter_association_fade_start_ratio: 0.5
+    # Rolling NURBS detector covariance is calibrated from the exported
+    # centerline dataset (nurbs_filter/detector_noise.json).
+    centerline_nurbs_control_points: 24
+    centerline_nurbs_measurement_spacing_m: 2.0
+    centerline_nurbs_max_forward_m: 150.0
+    centerline_nurbs_behind_spans: 3
+    centerline_nurbs_anchor_fraction: 0.05
+    centerline_nurbs_max_distance_m: 20.0
+    centerline_nurbs_gate: 15.0
+    centerline_nurbs_reinit_accept_fraction: 0.8
+    centerline_nurbs_reinit_patience: 3
+    centerline_nurbs_path_measurement_enabled: true  # only applied with KISS-ICP odometry
+    centerline_nurbs_path_lateral_sigma_m: 0.05
+    centerline_nurbs_white_m: 0.07803040503033568
+    centerline_nurbs_frame_translation_m: 0.09212388861017375
+    centerline_nurbs_smooth_shape_m: 0.19677121998361083
+    centerline_nurbs_correlation_length_m: 21.33011909668501
+    centerline_nurbs_process_per_sqrt_second_m: 0.003
+    centerline_nurbs_birth_m: 0.25
+    centerline_nurbs_robust_threshold_m: 0.2
+    centerline_nurbs_output_strength: 0.2         # blend NURBS lateral correction to protect obstacle precision
     occupancy_grid_resolution_m: 1.0
     occupancy_prior_probability: 0.08
     occupancy_point_hit_probability: 0.4      # applied once per obstacle point (capped below)
@@ -39,9 +61,9 @@ railguard_node:
     occupancy_neighbor_hit_weight: 0.25               # adjacent cell receives this fraction of point evidence
     occupancy_max_scan_hit_probability: 0.85          # below alert threshold: require repeated scans
     occupancy_immediate_close_distance_m: 15.0        # very near clusters are geometrically reliable
-    occupancy_immediate_near_distance_m: 50.0         # strong evidence can alert immediately through this range
-    occupancy_immediate_near_probability: 0.75
-    occupancy_immediate_far_distance_m: 110.0         # preserve sparse far-obstacle recall despite path jitter
+    occupancy_immediate_near_distance_m: 50.0         # sparse near obstacles may need immediate confirmation
+    occupancy_immediate_near_probability: 0.29
+    occupancy_immediate_far_distance_m: 99.0          # preserve sparse ~100 m obstacles despite path jitter
     occupancy_max_point_evidence: 7
     occupancy_max_log_odds: 8.0
     occupancy_max_time_gap_s: 1.0                      # reset after seeks/dropped intervals

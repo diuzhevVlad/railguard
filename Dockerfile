@@ -14,6 +14,7 @@ RUN pip3 install --no-cache-dir torch==2.5.1 torchvision==0.20.1 --index-url htt
 
 # model code, weights, ROS package
 COPY railpath /opt/railguard/railpath
+COPY nurbs_filter /opt/railguard/nurbs_filter
 COPY weights /opt/railguard/weights
 COPY railguard /opt/railguard/ws/src/railguard
 RUN . /opt/ros/humble/setup.sh && cd /opt/railguard/ws && colcon build --event-handlers console_direct- \

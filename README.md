@@ -214,7 +214,7 @@ minute of data first.
 The obstacle check consumes `/railguard/centerline` and the input cloud: every return inside the train's clearance
 envelope swept along the centerline is an obstacle candidate, and the nearest one gives the distance.
 The node and web app both run the same `railpath/obstacle_filter.py` spatial filter and
-`railpath/occupancy_filter.py` temporal pipeline and `railpath/centerline_filter.py` centerline state estimator.
+`railpath/occupancy_filter.py` temporal pipeline and `railpath/nurbs_centerline_filter.py` centerline state estimator.
 Neither adapter owns filtering logic. Temporal occupancy and centerline filtering
 and KISS-ICP odometry can be enabled independently; the raw model centerline remains separately available. The RViz
 layout shows retained obstacle points in orange and occupancy probabilities with an intensity colour map.
@@ -234,16 +234,21 @@ it at startup, so restart after editing. The web image copies this file during i
 | `near_height_distance_m`        | `10.0`  | extent of the near region (exclusive)                                    |
 | `min_cluster_points`            | `5`     | minimum connected group size                                             |
 | `bayesian_filter_enabled`       | `false` | fuse obstacle evidence over consecutive scans on a 1D occupancy grid          |
-| `centerline_filter_enabled`     | `false` | Kalman-style fusion of consecutive centerline predictions                     |
+| `centerline_filter_enabled`     | `false` | enable the selected temporal centerline filter                               |
+| `centerline_filter_algorithm`   | `rolling_nurbs` | choose `rolling_nurbs` or `legacy_pointwise` when centerline filtering is enabled |
 | `odometry_enabled`              | `false` | transform temporal state into the current local LiDAR frame with KISS-ICP      |
-| `centerline_filter_initial_variance_m2` | `0.25` | covariance assigned to a new or unmatched centerline sample             |
-| `centerline_filter_process_variance_m2` | `0.02` | uncertainty added by each predict step; lower values reduce temporal jitter |
-| `centerline_filter_measurement_variance_m2` | `0.09` | assumed variance of the current model prediction                     |
-| `centerline_filter_measurement_variance_growth_m2_per_m` | `0.0` | optional extra measurement variance per metre; calibrated model sigma is preferred |
-| `centerline_filter_max_measurement_variance_m2` | `0.50` | cap on distance/model-derived measurement variance |
-| `centerline_filter_use_model_uncertainty` | `true` | use calibrated per-distance model sigma when available |
-| `centerline_filter_max_correspondence_distance_m` | `2.0` | association gate between predicted and measured samples             |
-| `centerline_filter_association_fade_start_ratio` | `0.5` | fraction of the association gate where prior influence starts fading |
+| `centerline_filter_initial_variance_m2` | `0.25` | initial variance for the legacy pointwise filter and fallback samples |
+| `centerline_filter_max_correspondence_distance_m` | `2.0` | legacy pointwise association distance |
+| `centerline_nurbs_control_points` | `24` | rolling-window control-point count |
+| `centerline_nurbs_measurement_spacing_m` | `2.0` | detector sampling step for each update |
+| `centerline_nurbs_behind_spans` | `3` | uncertain control-point spans behind the initial detection |
+| `centerline_nurbs_max_distance_m` | `20.0` | largest detector-to-curve update distance |
+| `centerline_nurbs_gate` | `15.0` | innovation gate for detector updates |
+| `centerline_nurbs_reinit_accept_fraction` | `0.8` | low-association threshold for guarded reinitialization |
+| `centerline_nurbs_reinit_patience` | `3` | consecutive low-association frames before considering reset |
+| `centerline_nurbs_path_measurement_enabled` | `true` | use each new KISS-ICP sensor position as a soft curve-normal observation |
+| `centerline_nurbs_path_lateral_sigma_m` | `0.05` | sensor-to-curve lateral standard deviation when path measurements are enabled |
+| `centerline_nurbs_output_strength` | `0.2` | fraction of the NURBS lateral correction applied to the detector output |
 | `occupancy_grid_resolution_m`   | `1.0`   | spacing of probability samples along the centreline                           |
 | `occupancy_prior_probability`   | `0.08`  | starting probability for new or unmatched cells                              |
 | `occupancy_point_hit_probability` | `0.40` | independent occupied evidence contributed by each retained obstacle point     |
@@ -255,8 +260,8 @@ it at startup, so restart after editing. The web image copies this file during i
 | `occupancy_max_scan_hit_probability` | `0.85` | positive evidence ceiling per scan; below threshold requires confirmation  |
 | `occupancy_immediate_near_distance_m` | `50.0` | range where strong current evidence may bypass temporal confirmation       |
 | `occupancy_immediate_close_distance_m` | `15.0` | close clusters accepted immediately because their geometry is reliable     |
-| `occupancy_immediate_near_probability` | `0.75` | minimum posterior evidence for the near-range bypass                       |
-| `occupancy_immediate_far_distance_m` | `110.0` | far clusters bypass confirmation to preserve sparse long-range detections   |
+| `occupancy_immediate_near_probability` | `0.29` | minimum posterior evidence for the near-range bypass                       |
+| `occupancy_immediate_far_distance_m` | `99.0` | far clusters bypass confirmation to preserve sparse long-range detections   |
 | `occupancy_max_point_evidence`  | `7`     | cap on points contributing evidence to one cell in one scan                   |
 | `occupancy_max_log_odds`        | `8.0`   | saturation bound for accumulated confidence                                  |
 | `occupancy_max_time_gap_s`      | `1.0`   | reset threshold for gaps, seeks, or non-monotonic timestamps                  |
@@ -272,23 +277,59 @@ queries, without extending it past its finite predictions. Segmented rail points
 numerical matching tolerance. Connections use 3D distance: radius 0.20 m to 30 m, linearly increasing to 0.35 m at
 80 m and 0.60 m at 150 m, then constant. A connection must fit both endpoints' radii. Connected groups of at least
 five points survive; a chain is sufficient. Far decisions retain the baseline 10 cm rule, including at the 10 m
-
-When centerline filtering is enabled, each dense XYZ centerline sample carries an isotropic covariance. The previous
-posterior is the Kalman prior and the current model centerline is the measurement. Process variance is added during
-prediction. Well-associated samples use the Kalman gain; prior influence fades continuously near the association gate
-and the fade weights are smoothed along the line, avoiding a jump where only part of the line matches. Unmatched
-samples use the current measurement. Obstacle filtering uses this posterior centerline. The raw line remains green in
-the web app and on `/railguard/centerline`; the magenta posterior is shown separately and published on
-`/railguard/centerline_filtered`.
 boundary. The implementation includes bounded neighbor searches, dense-cell shortcuts, and overlapping regional
 passes for large envelopes, as in the app.
+
+When centerline filtering is enabled, a rolling NURBS curve and its control-point covariance are kept in the current
+sensor frame. KISS-ICP transforms the curve into the next frame when odometry is enabled; ordered detector points
+then update it using correlated point-to-normal measurement noise. The noise defaults come from
+`nurbs_filter/detector_noise.json`. The shared app/ROS adapter now uses the same forward-window initialization,
+correlated detector update, guarded reset, sensor-position observation, and far-end constraint as
+`nurbs_filter/demo_dataset.py`. The dense output blends the NURBS lateral position with the detector at each forward
+distance using `centerline_nurbs_output_strength`; Z remains the current detector value. A value of `1.0` gives the
+demo-equivalent full NURBS output, while the default `0.2` limits corridor displacement near switches and platforms.
+The path observation is applied only when odometry is enabled, because otherwise
+the sensor position cannot be tracked across frames. Obstacle filtering uses this result. The raw line remains green in the web app and on `/railguard/centerline`; the magenta filtered line is shown
+separately and published on `/railguard/centerline_filtered`. Other `centerline_filter_*` covariance knobs are
+retained for the selectable `legacy_pointwise` filter; all active NURBS knobs are in `railguard.yaml`. Set
+`centerline_filter_enabled: true`, `centerline_filter_algorithm: rolling_nurbs`, and `odometry_enabled: true` to use the tuned temporal filter, or change
+the algorithm to `legacy_pointwise` to reproduce the old behavior. Both the app and ROS node read this same setting.
+
+On the exported 10-scene dataset, the tuned `0.2` output blend with saved KISS-ICP poses gives 1.363830 m lateral
+RMSE and 0.261259 m MAE on 185,529 GT anchors, versus 1.623246 m and 0.294734 m for the raw detector. The
+full-strength (`1.0`) output gives approximately 0.336 m RMSE and 0.138 m MAE, matching the supplied demo report,
+but loses obstacle precision at switches and platforms. The separate 3-D pointwise RMSE in the obstacle evaluation
+improves from 1.8490 m to 1.5377 m with the tuned blend; its samples and error definition differ from the lateral
+demo metric. GT is derived from merged rails and saved odometry, not hand annotated, and these are in-sample results.
+
+The current obstacle precision/recall evaluation is in `outputs/filter_matrix_nurbs_tuned.json`. It replays
+the same cached predictions, scans, and KISS-ICP poses on all 10 generated bags (3,223 frames: 1,273 positive and
+1,950 negative). A frame is labeled positive when it contains at least five *synthetic* obstacle points; this does
+not independently label every real object in the original scan.
+
+| Filters | Precision | Recall | FP | FN |
+| --- | ---: | ---: | ---: | ---: |
+| None | 93.71% | 85.39% | 73 | 186 |
+| Occupancy only | 94.19% | 85.39% | 67 | 186 |
+| Tuned NURBS centerline only | 96.11% | 85.39% | 44 | 186 |
+| Tuned NURBS + occupancy | 97.14% | 85.39% | 32 | 186 |
+| Legacy pointwise centerline only | 94.43% | 85.15% | 64 | 189 |
+| Legacy pointwise + occupancy | 94.67% | 85.15% | 61 | 189 |
+
+Relative to no filtering, the tuned NURBS + occupancy setting removes 41 labeled false-positive frames without
+losing any labeled positive frames. The conservative lateral blend trades some geometric accuracy for a more stable
+obstacle corridor. The previous full-strength result is retained in
+`outputs/filter_matrix_nurbs_demo_equivalent.json`: it reached 0.4410 m 3-D centerline RMSE but only 87.77% obstacle
+precision and 85.15% recall with occupancy. These thresholds were tuned on the same generated bags used for this
+report, so the numbers are not an independent validation; the label definition can also count genuine, unlabeled
+objects as false positives.
 
 When the Bayesian filter is enabled, each retained point is assigned to its nearest 1 m centreline cell. Updates use
 log odds: every point contributes occupied evidence, so a denser obstacle return produces a stronger posterior, while
 a cell with no obstacle return receives free evidence. Adjacent cells receive weaker hit evidence, and the predict
 step diffuses a configurable fraction of history to adjacent cells to tolerate bin and odometry jitter. Point evidence
-is capped both by count and by a per-scan probability ceiling. With the supplied ceiling (`0.90`) below the alert
-threshold (`0.95`), a new obstacle must be supported by more than one scan, while repeated sparse returns at long range
+is capped both by count and by a per-scan probability ceiling. With the supplied ceiling (`0.85`) below the alert
+threshold (`0.90`), a new mid-range obstacle must be supported by more than one scan, while repeated sparse returns at long range
 still accumulate. The detection flag and distance come from cells at or above the configured
 posterior threshold; the obstacle cloud contains current returns in those occupied cells.
 

@@ -1,0 +1,26 @@
+{
+  "model": "rolling_nurbs.Noise detector covariance, sensor XY normal residuals",
+  "noise": {
+    "white": 0.07803040503033568,
+    "frame_translation": 0.09212388861017375,
+    "smooth_shape": 0.19677121998361083,
+    "correlation_length": 21.33011909668501
+  },
+  "diagnostics": {
+    "files": 10,
+    "frames": 3223,
+    "used_frames": 3126,
+    "matched_samples": 732742,
+    "rejected_large_errors": 16243,
+    "normal_bias_m": 0.027479210502154655,
+    "normal_rms_m": 0.23085594637283333,
+    "fit_cost": 0.20042371758897093,
+    "fit_success": true
+  },
+  "settings": {
+    "spacing_m": 0.5,
+    "max_forward_m": 150.0,
+    "max_error_m": 2.0,
+    "endpoint_margin_m": 1.0
+  }
+}

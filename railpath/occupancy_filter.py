@@ -15,6 +15,7 @@ from scipy.spatial import cKDTree
 
 from .centerline_filter import (BayesianCenterlineFilter, CenterlineEstimate,
                                 CenterlineFilterConfig)
+from .nurbs_centerline_filter import RollingNURBSCenterlineFilter
 from .obstacle_filter import (ObstacleDetection, ObstacleFilterConfig,
                               RailPrediction, detect_obstacle_points)
 
@@ -292,7 +293,10 @@ class ObstacleDetectionPipeline:
         self.centerline_filter_enabled = bool(centerline_filter_enabled)
         self.odometry_enabled = bool(odometry_enabled)
         self.filter = BayesianObstacleFilter(bayesian_config)
-        self.centerline_filter = BayesianCenterlineFilter(centerline_config)
+        if centerline_config.algorithm == "rolling_nurbs":
+            self.centerline_filter = RollingNURBSCenterlineFilter(centerline_config)
+        else:
+            self.centerline_filter = BayesianCenterlineFilter(centerline_config)
         self.odometry = odometry or (KissICPOdometry(bayesian_config.odometry_scan_stride)
                                      if self.odometry_enabled else None)
         self.last_timestamp_ns: int | None = None
@@ -323,7 +327,8 @@ class ObstacleDetectionPipeline:
         effective_prediction = prediction
         if self.centerline_filter_enabled:
             centerline_estimate = self.centerline_filter.update(
-                prediction, pose, odometry_used=self.odometry_enabled)
+                prediction, pose, odometry_used=self.odometry_enabled,
+                timestamp_ns=timestamp_ns)
             effective_prediction = centerline_estimate.prediction
 
         raw = detect_obstacle_points(

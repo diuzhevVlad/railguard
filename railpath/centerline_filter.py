@@ -16,18 +16,43 @@ from .obstacle_filter import RailPrediction
 
 @dataclass(frozen=True)
 class CenterlineFilterConfig:
-    """Scalar covariance settings shared by every XYZ centerline sample."""
+    """Shared NURBS settings plus retained pointwise-filter comparison knobs."""
 
+    algorithm: str = "rolling_nurbs"
     initial_variance_m2: float = 0.25
-    process_variance_m2: float = 0.02
-    measurement_variance_m2: float = 0.09
+    process_variance_m2: float = 0.01
+    measurement_variance_m2: float = 0.04
     measurement_variance_growth_m2_per_m: float = 0.0
     max_measurement_variance_m2: float = 0.50
     use_model_uncertainty: bool = True
     max_correspondence_distance_m: float = 2.0
     association_fade_start_ratio: float = 0.5
+    # Rolling NURBS settings. Detector-noise defaults come from the exported
+    # centerline calibration in nurbs_filter/detector_noise.json.
+    nurbs_control_points: int = 24
+    nurbs_measurement_spacing_m: float = 2.0
+    nurbs_max_forward_m: float = 150.0
+    nurbs_behind_spans: int = 3
+    nurbs_anchor_fraction: float = 0.05
+    nurbs_max_distance_m: float = 20.0
+    nurbs_gate: float = 15.0
+    nurbs_reinit_accept_fraction: float = 0.8
+    nurbs_reinit_patience: int = 3
+    nurbs_path_measurement_enabled: bool = True
+    nurbs_path_lateral_sigma_m: float = 0.05
+    nurbs_white_m: float = 0.07803040503033568
+    nurbs_frame_translation_m: float = 0.09212388861017375
+    nurbs_smooth_shape_m: float = 0.19677121998361083
+    nurbs_correlation_length_m: float = 21.33011909668501
+    nurbs_process_per_sqrt_second_m: float = 0.003
+    nurbs_birth_m: float = 0.25
+    nurbs_robust_threshold_m: float = 0.2
+    nurbs_output_strength: float = 0.2
 
     def __post_init__(self) -> None:
+        if self.algorithm not in ("rolling_nurbs", "legacy_pointwise"):
+            raise ValueError(
+                "algorithm must be 'rolling_nurbs' or 'legacy_pointwise'")
         for name in ("initial_variance_m2", "measurement_variance_m2",
                      "max_measurement_variance_m2",
                      "max_correspondence_distance_m"):
@@ -50,11 +75,42 @@ class CenterlineFilterConfig:
                 "association_fade_start_ratio must be in [0, 1)")
         if not isinstance(self.use_model_uncertainty, bool):
             raise ValueError("use_model_uncertainty must be a boolean")
+        if (not isinstance(self.nurbs_control_points, int)
+                or self.nurbs_control_points < 6):
+            raise ValueError("nurbs_control_points must be an integer >= 6")
+        if (not isinstance(self.nurbs_behind_spans, int)
+                or not 1 <= self.nurbs_behind_spans <= self.nurbs_control_points - 6):
+            raise ValueError("nurbs_behind_spans must leave at least six controls")
+        if (not isinstance(self.nurbs_reinit_patience, int)
+                or self.nurbs_reinit_patience < 1):
+            raise ValueError("nurbs_reinit_patience must be a positive integer")
+        if (not np.isfinite(self.nurbs_reinit_accept_fraction)
+                or not 0 <= self.nurbs_reinit_accept_fraction <= 1):
+            raise ValueError("nurbs_reinit_accept_fraction must be in [0, 1]")
+        if not isinstance(self.nurbs_path_measurement_enabled, bool):
+            raise ValueError("nurbs_path_measurement_enabled must be a boolean")
+        for name in ("nurbs_measurement_spacing_m", "nurbs_max_forward_m",
+                     "nurbs_max_distance_m", "nurbs_gate",
+                     "nurbs_path_lateral_sigma_m", "nurbs_white_m",
+                     "nurbs_frame_translation_m", "nurbs_smooth_shape_m",
+                     "nurbs_correlation_length_m", "nurbs_birth_m",
+                     "nurbs_robust_threshold_m"):
+            value = getattr(self, name)
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if (not np.isfinite(self.nurbs_process_per_sqrt_second_m)
+                or self.nurbs_process_per_sqrt_second_m < 0):
+            raise ValueError("nurbs_process_per_sqrt_second_m must be nonnegative")
+        if not 0 < self.nurbs_anchor_fraction < 1:
+            raise ValueError("nurbs_anchor_fraction must be in (0, 1)")
+        if (not np.isfinite(self.nurbs_output_strength)
+                or not 0 < self.nurbs_output_strength <= 1):
+            raise ValueError("nurbs_output_strength must be in (0, 1]")
 
 
 @dataclass(frozen=True)
 class CenterlineEstimate:
-    """Filtered centerline and posterior variance in the current LiDAR frame."""
+    """Filtered centerline and per-sample variance in the current LiDAR frame."""
 
     prediction: RailPrediction
     variances_m2: np.ndarray
@@ -113,7 +169,8 @@ class BayesianCenterlineFilter:
         return np.minimum(variance, self.config.max_measurement_variance_m2)
 
     def update(self, prediction: RailPrediction, pose: np.ndarray | None = None,
-               odometry_used: bool = False) -> CenterlineEstimate:
+               odometry_used: bool = False,
+               timestamp_ns: int | None = None) -> CenterlineEstimate:
         """Predict the prior into this frame and fuse the current centerline."""
         measurement = self._validated_center(prediction)
         current_pose = (np.eye(4, dtype=np.float64) if pose is None
@@ -164,6 +221,7 @@ class BayesianCenterlineFilter:
             details = {
                 **details,
                 "centerline_filter_enabled": True,
+                "centerline_filter_type": "legacy_pointwise",
                 "centerline_filter_odometry_used": bool(odometry_used),
                 "centerline_filter_matched_samples": matched_count,
                 "centerline_filter_mean_std_m": float(np.sqrt(variances).mean()),

@@ -28,3 +28,6 @@ weights/
 outputs/
 .venv/
 *.log
+
+
+nurbs_filter/dataset_demo_output

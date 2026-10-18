@@ -87,7 +87,8 @@ class RailGuardNode(Node):
                                  QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.get_logger().info(
             f'listening on {topic}; Bayesian filter={self.bayesian_filter_enabled}, '
-            f'centerline filter={self.centerline_filter_enabled}, '
+            f'centerline filter={self.centerline_filter_enabled} '
+            f'({self.centerline_config.algorithm}), '
             f'KISS-ICP odometry={self.odometry_enabled}')
 
     def on_cloud(self, msg):

@@ -33,6 +33,7 @@ _BAYESIAN_PARAMETERS = {
 }
 
 _CENTERLINE_PARAMETERS = {
+    "centerline_filter_algorithm": "algorithm",
     "centerline_filter_initial_variance_m2": "initial_variance_m2",
     "centerline_filter_process_variance_m2": "process_variance_m2",
     "centerline_filter_measurement_variance_m2": "measurement_variance_m2",
@@ -45,6 +46,25 @@ _CENTERLINE_PARAMETERS = {
         "max_correspondence_distance_m",
     "centerline_filter_association_fade_start_ratio":
         "association_fade_start_ratio",
+    "centerline_nurbs_control_points": "nurbs_control_points",
+    "centerline_nurbs_measurement_spacing_m": "nurbs_measurement_spacing_m",
+    "centerline_nurbs_max_forward_m": "nurbs_max_forward_m",
+    "centerline_nurbs_behind_spans": "nurbs_behind_spans",
+    "centerline_nurbs_anchor_fraction": "nurbs_anchor_fraction",
+    "centerline_nurbs_max_distance_m": "nurbs_max_distance_m",
+    "centerline_nurbs_gate": "nurbs_gate",
+    "centerline_nurbs_reinit_accept_fraction": "nurbs_reinit_accept_fraction",
+    "centerline_nurbs_reinit_patience": "nurbs_reinit_patience",
+    "centerline_nurbs_path_measurement_enabled": "nurbs_path_measurement_enabled",
+    "centerline_nurbs_path_lateral_sigma_m": "nurbs_path_lateral_sigma_m",
+    "centerline_nurbs_white_m": "nurbs_white_m",
+    "centerline_nurbs_frame_translation_m": "nurbs_frame_translation_m",
+    "centerline_nurbs_smooth_shape_m": "nurbs_smooth_shape_m",
+    "centerline_nurbs_correlation_length_m": "nurbs_correlation_length_m",
+    "centerline_nurbs_process_per_sqrt_second_m": "nurbs_process_per_sqrt_second_m",
+    "centerline_nurbs_birth_m": "nurbs_birth_m",
+    "centerline_nurbs_robust_threshold_m": "nurbs_robust_threshold_m",
+    "centerline_nurbs_output_strength": "nurbs_output_strength",
 }
 
 
