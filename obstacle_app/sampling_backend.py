@@ -15,7 +15,7 @@ from rosbags.typesys import Stores, get_typestore
 from kiss_icp.config import load_config
 from kiss_icp.kiss_icp import KissICP
 
-from .cloud import append_xyz, filter_points, valid_xyz, xyz_view
+from .cloud import append_xyz, filter_points, valid_xyz, xyz_view, normalize_axes
 from .core import Progress, Scenario
 from .mesh import load_collada_mesh
 from .merged_rails import MergedRailMap, merge_rails, world_rail_observation
@@ -99,7 +99,7 @@ class RayCastingBackend:
                 first = next(reader.messages(connections=matches, start=start_ns, stop=stop_ns), None)
                 if first is None or first[1] != frame_timestamps[0]:
                     raise ValueError("Saved poses do not match this bag")
-                sensor = SensorRayModel.from_cloud(reader.deserialize(first[2], matches[0].msgtype))
+                sensor = SensorRayModel.from_cloud(normalize_axes(reader.deserialize(first[2], matches[0].msgtype), scenario.topic))
                 rail_map_method = "cached_editor_map"
                 pose_phase_seconds = time.perf_counter() - pose_phase_started
             else:
@@ -112,7 +112,7 @@ class RayCastingBackend:
                 track_bases = []
                 for _, bag_ns, raw in reader.messages(connections=matches,
                                                        start=start_ns, stop=stop_ns):
-                    msg = reader.deserialize(raw, matches[0].msgtype)
+                    msg = normalize_axes(reader.deserialize(raw, matches[0].msgtype), scenario.topic)
                     if not poses:
                         sensor = SensorRayModel.from_cloud(msg)
                     xyz = valid_xyz(msg)
@@ -269,7 +269,7 @@ class RayCastingBackend:
                             inherited.get("sampled_points", 0) if bag_ns in inherited_modified else 0))
                         if count % scenario.every_n_frames == 0 or source_tail:
                             operation_started = time.perf_counter()
-                            msg = reader.deserialize(raw, conn.msgtype)
+                            msg = normalize_axes(reader.deserialize(raw, conn.msgtype), conn.topic)
                             timings["decode_s"] += time.perf_counter() - operation_started
                             pose = poses[count - 1]
                             total = msg.width * msg.height
@@ -314,7 +314,7 @@ class RayCastingBackend:
                                 msg = append_xyz(msg, rendered.points, rendered.rings)
                                 timings["pack_s"] += time.perf_counter() - operation_started
                                 operation_started = time.perf_counter()
-                                raw = typestore.serialize_cdr(msg, conn.msgtype)
+                                raw = typestore.serialize_cdr(normalize_axes(msg, conn.topic, inverse=True), conn.msgtype)
                                 timings["serialize_s"] += time.perf_counter() - operation_started
                                 modified_timestamps.append(bag_ns)
                                 modified += 1

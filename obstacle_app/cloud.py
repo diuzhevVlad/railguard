@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 import struct
+from copy import copy
 
 import numpy as np
 
 
 FIELD_FORMATS = {1: "b", 2: "B", 3: "h", 4: "H", 5: "i", 6: "I", 7: "f", 8: "d"}
+
+
+def normalize_axes(msg: object, topic: str, *, inverse: bool = False) -> object:
+    """Use -Y forward for /iv_points; invert before writing its original topic.
+
+    Preserve the source message, all non-XYZ fields, and row/record padding.
+    Call once at each bag read boundary, before viewing or processing the scan.
+    """
+    if topic not in ("/iv_points", "iv_points"):
+        return msg
+    result = copy(msg)
+    result.data = np.frombuffer(bytes(msg.data), dtype=np.uint8).copy()
+    cloud = xyz_view(result)
+    x, y = cloud["x"].copy(), cloud["y"].copy()
+    cloud["x"], cloud["y"] = (-y, x) if inverse else (y, -x)
+    return result
 
 
 def xyz_view(msg: object) -> np.ndarray:
@@ -39,22 +56,35 @@ def valid_xyz(msg: object, stride: int = 1) -> np.ndarray:
     return xyz[good].astype(np.float32, copy=False)
 
 
-def preview_xyz(msg: object, max_points: int = 30000, tail_points: int = 0) -> np.ndarray:
-    """Downsample a frame while keeping a known synthetic tail fully visible."""
+def preview_xyz(msg: object, max_points: int = 100000, tail_points: int = 0) -> np.ndarray:
+    """Keep scan detail without aliasing the LiDAR's ordered firing pattern.
+
+    Small scans (including typical Falcon scans) retain every valid return.
+    Larger scans use deterministic jittered strata rather than a fixed stride,
+    which can repeatedly select the same beam in each firing group. The budget
+    applies to background only; a known synthetic tail stays fully visible.
+    """
+    if max_points < 1:
+        raise ValueError("Preview point budget must be positive")
     if tail_points < 0 or tail_points > msg.width * msg.height:
         raise ValueError("Invalid synthetic tail length")
-    if not tail_points:
-        stride = max(1, int(np.ceil(msg.width * msg.height / max_points)))
-        return valid_xyz(msg, stride)
     cloud = xyz_view(msg).reshape(-1)
-    original = cloud[:-tail_points]
-    stride = max(1, int(np.ceil(len(original) / max_points)))
-    sampled = original[::stride]
-    original_xyz = np.column_stack([sampled[k] for k in ("x", "y", "z")])
+    original = cloud[:-tail_points] if tail_points else cloud
+    original_xyz = np.column_stack([original[k] for k in ("x", "y", "z")])
     good = np.isfinite(original_xyz).all(axis=1) & (np.einsum("ij,ij->i", original_xyz, original_xyz) >= 0.09)
+    original_xyz = original_xyz[good]
+    if len(original_xyz) > max_points:
+        edges = np.arange(max_points + 1, dtype=np.int64) * len(original_xyz) // max_points
+        # One point per disjoint interval, stable on replay, without touching
+        # global RNG state or locking sampling to an individual laser channel.
+        rng = np.random.default_rng(0)
+        indices = edges[:-1] + (rng.random(max_points) * np.diff(edges)).astype(np.int64)
+        original_xyz = original_xyz[indices]
+    if not tail_points:
+        return original_xyz.astype(np.float32, copy=False)
     tail = cloud[-tail_points:]
     tail_xyz = np.column_stack([tail[k] for k in ("x", "y", "z")])
-    return np.concatenate((original_xyz[good], tail_xyz)).astype(np.float32, copy=False)
+    return np.concatenate((original_xyz, tail_xyz)).astype(np.float32, copy=False)
 
 
 def filter_points(msg: object, keep: np.ndarray) -> object:

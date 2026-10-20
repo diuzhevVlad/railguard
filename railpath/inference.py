@@ -1,10 +1,10 @@
-"""Inference API: one LiDAR scan in, the track centerline to 200 m out. No ROS, no Rerun, no postprocessing.
+"""Inference API: one scan to a centerline over RAILPATH_ROWS (200 or 400 m).
 
     from railpath import RailPath
     rp = RailPath('results/path/best.pt', refiner='results/refine')      # refiner optional
     out = rp.predict(xyz, ring=None)                                       # xyz (N,3) float32 in the LiDAR frame, forward = -Y, Z up
-    out['centerline']   # (200,3): x, y, z of the track centre at 1..200 m ahead (y = -d); NaN beyond the supported range without a refiner
-    out['sigma']        # (200,): lateral 1-sigma of the centerline in metres (calibrated) when a refiner is loaded, else None
+    out['centerline']   # (ROWS,3): x, y, z at 1..ROWS m (y = -d); NaN beyond supported range without a refiner
+    out['sigma']        # (ROWS,): calibrated lateral 1-sigma in metres when a refiner is loaded, else None
     out['horizon']      # metres up to which the votes support the curve
     out['rails']        # (M,3) points labelled as rail, out['rail_side'] (M,) 1 = left, 2 = right
     out['seg']          # (128,1000) segmentation image: 0 background, 1 left rail, 2 right rail; out['image'] the 8-channel input
@@ -87,6 +87,7 @@ def make_image_gpu(xyz, intensity, ring, device, sparse=None):
 
 class RailPath:
     def __init__(self, weights, refiner=None, drop_intensity=True, device=None):
+        self.rows = ROWS
         self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
         self.model = RailNet().to(self.device); load_weights(self.model, weights, self.device); self.model.eval()
         self.drop_intensity = drop_intensity

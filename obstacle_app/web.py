@@ -23,11 +23,11 @@ from pydantic import BaseModel, Field, model_validator
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
-from .cloud import preview_xyz
+from .cloud import preview_xyz, normalize_axes
 from .core import ObstacleSpec, WorldObstacleSpec, Progress, Scenario, SimulationBackend
 from .world_map import WorldMapManager, world_mesh, preview_materials, source_fingerprint
 from .detection import INITIAL_SPEED_MPS, build_merged_rail_map, RailPrediction
-from .scan_detection import ScanDetector, display_points, rejected_payload
+from .scan_detection import ScanDetector, display_points, rejected_payload, tracking_payload
 from .learned_detection import LearnedDetectionManager, prediction_payload
 from .sampling_backend import RayCastingBackend
 
@@ -120,7 +120,7 @@ class DetectionRequest(BaseModel):
     initial_speed_m_s: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     train_width_m: float = Field(default=2.1, gt=0, le=20, allow_inf_nan=False)
     train_height_m: float = Field(default=3., gt=0, le=20, allow_inf_nan=False)
-    max_forward_m: float = Field(default=150., ge=5, le=200, allow_inf_nan=False)
+    max_forward_m: float = Field(default=150., ge=5, le=400, allow_inf_nan=False)
 
 
 @dataclass
@@ -151,7 +151,8 @@ class DetectionManager:
     def start(self, bag_id: str, bag: Path, topic: str, speed: float) -> DetectionJob:
         source_files = sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns)
                               for p in bag.glob("*.db3"))
-        identity = json.dumps(["v2", bag_id, topic, speed, source_files])
+        version = "v3-iv-axes" if topic in ("/iv_points", "iv_points") else "v2"
+        identity = json.dumps([version, bag_id, topic, speed, source_files])
         key = hashlib.sha256(identity.encode()).hexdigest()[:24]
         path = self.root / f"{key}.npz"
         with self.lock:
@@ -276,7 +277,7 @@ def create_app(
     manager = JobManager(backend or RayCastingBackend(), output_root)
     detection_manager = DetectionManager(output_root, detection_map_builder)
     map_manager = WorldMapManager(output_root, detection_manager)
-    learned_manager = LearnedDetectionManager(scan_detector_factory)
+    learned_manager = LearnedDetectionManager(scan_detector_factory, output_root / ".tracking_poses")
     models_root = model_path.parent.parent.parent
 
     app = FastAPI(title="Obstacle Bag Studio")
@@ -296,6 +297,10 @@ def create_app(
     @app.get("/mesh-controls.js")
     def mesh_controls_javascript():
         return FileResponse(STATIC/"mesh-controls.js", media_type="text/javascript", headers={"Cache-Control": "no-store"})
+
+    @app.get("/cloud-renderer.js")
+    def cloud_renderer_javascript():
+        return FileResponse(STATIC/"cloud-renderer.js", media_type="text/javascript", headers={"Cache-Control": "no-store"})
 
     @app.get("/map-editor.js")
     def map_javascript():
@@ -438,7 +443,8 @@ def create_app(
                 if not any(c.topic == request.topic and c.msgtype == "sensor_msgs/msg/PointCloud2"
                            for c in reader.connections):
                     raise ValueError("Select a PointCloud2 topic")
-            return asdict(learned_manager.start(request.bag_id, bag, request.topic, request.train_width_m, request.train_height_m, request.max_forward_m))
+            speed = request.initial_speed_m_s if request.initial_speed_m_s is not None else source_initial_speed(bag)
+            return asdict(learned_manager.start(request.bag_id, bag, request.topic, request.train_width_m, request.train_height_m, request.max_forward_m, speed))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -468,14 +474,16 @@ def create_app(
                 if frame is None or frame[1] != timestamp_ns:
                     raise HTTPException(status_code=404, detail="Frame not found in selected bag")
                 try:
-                    result = detector.detect(timestamp_ns, reader.deserialize(frame[2], frame[0].msgtype))
+                    msg = normalize_axes(reader.deserialize(frame[2], frame[0].msgtype), frame[0].topic)
+                    result = detector.detect(timestamp_ns, msg)
                 except Exception as exc:
                     raise HTTPException(400, f"RailGuard inference failed: {exc}") from exc
         prediction, detection = result
         return {"timestamp_ns": str(timestamp_ns), "candidate_points": detection.point_count,
                 "detected": detection.detected, "distance_m": detection.distance_m,
                 **prediction_payload(prediction),
-                "detected_xyz": display_points(detection.points).tolist(), **rejected_payload(detection)}
+                "detected_xyz": display_points(detection.points).tolist(), **rejected_payload(detection),
+                **tracking_payload(detection)}
 
     @app.websocket("/ws/playback")
     async def playback(ws: WebSocket) -> None:
@@ -552,7 +560,7 @@ def create_app(
                 frame_counts = provenance.get("frame_counts", {})
 
                 async def send_frame(conn, bag_ns: int, raw: bytes, frame: int) -> None:
-                    msg = reader.deserialize(raw, conn.msgtype)
+                    msg = normalize_axes(reader.deserialize(raw, conn.msgtype), conn.topic)
                     counts = frame_counts.get(str(bag_ns), {})
                     tail = counts.get("synthetic_points", counts.get(
                         "added", synthetic_count if bag_ns in modified_timestamps else 0))
@@ -582,6 +590,7 @@ def create_app(
                                         "detected_points": len(detected_points),
                                         "candidate_points": detection.point_count if detection else 0,
                                         **rejected_payload(detection),
+                                        **tracking_payload(detection),
                                         "detected": detection.detected if detection else False,
                                         "distance_m": detection.distance_m if detection else None,
                                         **(prediction_payload(prediction) if prediction else {"rail_center": None,"rail_continuation": [],"rail_prediction": None})})

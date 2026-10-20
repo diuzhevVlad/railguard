@@ -11,5 +11,13 @@ railguard_node:
     max_forward_m: 150.0                             # can use the refined line up to 200 m
     min_height_above_track_m: 0.10
     near_min_height_above_track_m: 0.20
-    near_height_distance_m: 10.0
-    min_cluster_points: 5
+    near_height_distance_m: 15.0
+    min_cluster_points: 4
+    count_unique_xyz: true                          # duplicate XYZ records do not add cluster support
+    # Odometry aligns candidate groups; neural inference still uses one scan.
+    initial_speed_m_s: 0.0
+    tracking_match_distance_m: 1.0
+    tracking_window_scans: 5
+    tracking_minimum_hits: 4
+    tracking_immediate_unique_points_gt: 50          # strictly >50, per group
+    tracking_max_gap_s: 2.0

@@ -23,8 +23,25 @@ class ObstacleFilterConfig:
     min_cluster_points: int = 5
     distance_knots_m: tuple[float, ...] = (0., 30., 80., 150.)
     radius_knots_m: tuple[float, ...] = (.2, .2, .35, .6)
+    count_unique_xyz: bool = True
+    stabilize_envelope: bool = True
+    verify_wall_geometry: bool = False
+    reject_trackbed_strips: bool = False
+    min_near_component_extent_m: float = 0.04
+    near_component_distance_m: float = 10.0
+    lateral_correction_fade_m: float | None = 10.0
 
     def __post_init__(self):
+        if not isinstance(self.verify_wall_geometry, bool) or not isinstance(self.reject_trackbed_strips, bool):
+            raise ValueError("Structural verification flags must be booleans")
+        if not isinstance(self.count_unique_xyz,bool) or not isinstance(self.stabilize_envelope,bool):
+            raise ValueError('count_unique_xyz and stabilize_envelope must be booleans')
+        for value in (self.min_near_component_extent_m, self.near_component_distance_m):
+            if not np.isfinite(value) or value < 0:
+                raise ValueError('Near-component extent and distance must be finite and nonnegative')
+        if self.lateral_correction_fade_m is not None and (
+                not np.isfinite(self.lateral_correction_fade_m) or self.lateral_correction_fade_m < 0):
+            raise ValueError('Lateral correction fade must be finite and nonnegative, or None')
         for value in (self.train_width_m, self.train_height_m):
             if not np.isfinite(value) or value <= 0:
                 raise ValueError("Train dimensions must be finite and positive")
@@ -46,6 +63,61 @@ class ObstacleFilterConfig:
 
 
 def filter_obstacle_candidates(points, config=ObstacleFilterConfig()):
+    """Require distinct XYZ support, then preserve every accepted input record."""
+    xyz=np.asarray(points)
+    if xyz.ndim!=2 or xyz.shape[1]!=3 or not np.isfinite(xyz).all():
+        raise ValueError('Expected finite Nx3 candidate points')
+    if not config.count_unique_xyz or config.min_cluster_points==1 or not len(xyz):
+        return _filter_obstacle_candidates(xyz,config)
+    # Byte-row keys avoid the much slower three-field float sort used by
+    # np.unique(axis=0). Canonicalize signed zero so +0/-0 remain one XYZ.
+    canonical=np.ascontiguousarray(xyz+0)
+    keys=canonical.view(np.dtype((np.void,canonical.dtype.itemsize*3))).reshape(-1)
+    _,first,inverse=np.unique(keys,return_index=True,return_inverse=True)
+    unique=xyz[first]
+    return _filter_obstacle_candidates(unique,config)[inverse]
+
+
+def filter_compact_near_components(points, config=ObstacleFilterConfig()):
+    """Reject only isolated, physically tiny groups near the sensor.
+
+    The support grid is at least as wide as every clustering radius. Its
+    adjacent-cell graph therefore over-connects the original components: it
+    cannot split a real component into tiny pieces. Only groups whose entire
+    bounding-box diagonal is below the configured extent are removed.
+    Every cell has at most 26 neighbors, including on dense contact scans.
+    """
+    xyz = np.asarray(points)
+    if xyz.ndim != 2 or xyz.shape[1] != 3 or not np.isfinite(xyz).all():
+        raise ValueError('Expected finite Nx3 candidate points')
+    keep = np.ones(len(xyz), dtype=bool)
+    if (not len(xyz) or config.min_cluster_points == 1
+            or config.min_near_component_extent_m == 0):
+        return keep
+    depth = -xyz[:, 1]
+    boundary = config.near_component_distance_m
+    if not np.any(depth < boundary):
+        return keep
+    cell_size = max(config.radius_knots_m)
+    context = np.flatnonzero(depth <= boundary + max(cell_size, config.min_near_component_extent_m))
+    local = xyz[context]
+    cells, inverse = np.unique(np.floor(local / cell_size).astype(np.int64),
+                               axis=0, return_inverse=True)
+    pairs = cKDTree(cells).query_pairs(1., p=np.inf, output_type='ndarray')
+    graph = coo_matrix((np.ones(len(pairs), dtype=bool), (pairs[:, 0], pairs[:, 1])),
+                       shape=(len(cells), len(cells))).tocsr()
+    count, labels = connected_components(graph, directed=False)
+    labels = labels[inverse]
+    lo, hi = np.full((count, 3), np.inf), np.full((count, 3), -np.inf)
+    np.minimum.at(lo, labels, local)
+    np.maximum.at(hi, labels, local)
+    extent = np.linalg.norm(hi - lo, axis=1)
+    keep[context] = ((depth[context] >= boundary)
+                     | (extent[labels] + 1e-6 >= config.min_near_component_extent_m))
+    return keep
+
+
+def _filter_obstacle_candidates(points, config):
     """Return a keep mask without modifying points.
 
     Radius interpolates smoothly with forward depth (-Y). Two points connect
@@ -131,6 +203,10 @@ class ObstacleDetection:
     rejected_points: np.ndarray | None = None
     excluded_rail_count: int = 0
     nearest_point: np.ndarray | None = None
+    prediction: RailPrediction | None = None
+    candidate_points: np.ndarray | None = None
+    unconfirmed_points: np.ndarray | None = None
+    tracks: list | None = None
 
 
 def envelope_candidates(xyz: np.ndarray, prediction: RailPrediction,
@@ -153,7 +229,12 @@ def _envelope_candidates(xyz, prediction, width_m, height_m):
     # Restrict the expensive nearest-path query to a broad sensor-frame ROI.
     lo = center.min(axis=0) - np.array([width_m, width_m, 0.0])
     hi = center.max(axis=0) + np.array([width_m, width_m, height_m])
-    candidates = xyz[np.all((xyz >= lo) & (xyz <= hi), axis=1)]
+    # Separate coordinate comparisons avoid two Nx3 boolean temporaries and
+    # a row reduction on every full scan. The ROI is exactly the same box.
+    inside_box = ((xyz[:, 0] >= lo[0]) & (xyz[:, 0] <= hi[0])
+                  & (xyz[:, 1] >= lo[1]) & (xyz[:, 1] <= hi[1])
+                  & (xyz[:, 2] >= lo[2]) & (xyz[:, 2] <= hi[2]))
+    candidates = xyz[inside_box]
     if not len(candidates):
         return empty
     lateral, nearest = cKDTree(center[:, :2]).query(
@@ -173,9 +254,43 @@ def _envelope_candidates(xyz, prediction, width_m, height_m):
 def detect_obstacle_points(xyz: np.ndarray, prediction: RailPrediction,
                            filter_config: ObstacleFilterConfig = ObstacleFilterConfig()) -> ObstacleDetection:
     """Filter small components after the forward cutoff and envelope check."""
+    if filter_config.stabilize_envelope:
+        from .envelope_stabilization import stabilize_rail_prediction
+        prediction=stabilize_rail_prediction(xyz,prediction,filter_config.lateral_correction_fade_m)
+    initial = _detect_prepared(xyz, prediction, filter_config)
+    if not initial.detected or not (filter_config.verify_wall_geometry or filter_config.reject_trackbed_strips):
+        return initial
+    from .structural_verification import verification_geometry
+    corrected, keep = verification_geometry(xyz, prediction, initial.points, filter_config)
+    changed = not np.array_equal(corrected.center, prediction.center)
+    if changed:
+        verified = _detect_prepared(xyz, corrected, filter_config)
+        # Use full-scan clustering context in both passes. Re-clustering only
+        # proposals changes support at the 10 m height threshold boundary.
+        def keys(points):
+            canonical = np.ascontiguousarray(points + 0, dtype=np.float32)
+            return canonical.view('V12').reshape(-1)
+        keep &= np.isin(keys(initial.points), keys(verified.points))
+    if keep.all() and not changed:
+        return initial
+    points = initial.points[keep]
+    distance = nearest_point = None
+    if len(points):
+        _, nearest = cKDTree(corrected.center[:, :2]).query(points[:, :2])
+        distances = corrected.distance_along_m[nearest]
+        closest = int(np.argmin(distances))
+        distance = float(distances[closest])
+        nearest_point = points[closest].copy()
+    rejected = np.concatenate([initial.rejected_points, initial.points[~keep]])
+    return ObstacleDetection(bool(len(points)), len(points), distance, points,
+                             rejected, initial.excluded_rail_count, nearest_point, corrected)
+
+
+def _detect_prepared(xyz, prediction, filter_config):
+    """Classify a full scan under an already calibrated envelope."""
     candidates, nearest = _envelope_candidates(xyz, prediction, filter_config.train_width_m, filter_config.train_height_m)
     if not len(candidates):
-        return ObstacleDetection(False, 0, None, candidates, candidates.copy())
+        return ObstacleDetection(False, 0, None, candidates, candidates.copy(),prediction=prediction)
     is_rail = np.zeros(len(candidates), dtype=bool)
     if prediction.rail_points is not None and len(prediction.rail_points):
         # Match the model's returned XYZ to original scan returns. This tiny
@@ -212,6 +327,8 @@ def detect_obstacle_points(xyz: np.ndarray, prediction: RailPrediction,
             keep[active[selected]] = True
     else:
         keep[active] = filter_obstacle_candidates(candidates[active], filter_config)
+    active = np.flatnonzero(keep)
+    keep[active] = filter_compact_near_components(candidates[active], filter_config)
     points = candidates[keep]
     distance = None
     nearest_point = None
@@ -221,12 +338,13 @@ def detect_obstacle_points(xyz: np.ndarray, prediction: RailPrediction,
         distance = float(distances[closest])
         nearest_point = points[closest].copy()
     return ObstacleDetection(bool(len(points)), len(points), distance, points,
-                             candidates[~keep & ~is_rail], int(is_rail.sum()), nearest_point)
+                             candidates[~keep & ~is_rail], int(is_rail.sum()), nearest_point,prediction)
 
 
 
 def detect_obstacles(points, centerline, rail_points=None,
-                     config=ObstacleFilterConfig(), max_forward_m=150.0):
+                     config=ObstacleFilterConfig(), max_forward_m=150.0,
+                     candidate_detector=None):
     """Filter one scan using the model's raw 1 m centerline samples.
 
     Returns ObstacleDetection with retained XYZ and nearest arc distance in
@@ -261,4 +379,5 @@ def detect_obstacles(points, centerline, rail_points=None,
         if rails.ndim != 2 or rails.shape[1] != 3:
             raise ValueError('Expected Nx3 rail points')
         rails = rails[np.isfinite(rails).all(axis=1)]
-    return detect_obstacle_points(xyz, RailPrediction(center, distances, rail_points=rails, max_forward_m=max_forward_m), config)
+    detector = candidate_detector or detect_obstacle_points
+    return detector(xyz, RailPrediction(center, distances, rail_points=rails, max_forward_m=max_forward_m), config)

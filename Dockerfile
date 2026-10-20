@@ -11,6 +11,10 @@ RUN pip3 install --no-cache-dir torch==2.5.1 torchvision==0.20.1 --index-url htt
     && pip3 install --no-cache-dir "numpy<2.3" "scipy<1.16" segmentation-models-pytorch==0.5.0 \
     && python3 -c "import torch, torchvision; assert torch.__version__.startswith('2.5.1') and torch.version.cuda == '12.1', torch.__version__"
 
+# Humble's pkg_resources checks KISS-ICP's typer[all] extra at node startup.
+# Recent Typer releases removed that extra.
+RUN pip3 install --no-cache-dir "kiss-icp>=1.3,<2" "typer[all]>=0.6,<0.10"
+
 # model code, weights, ROS package
 COPY railpath /opt/railguard/railpath
 COPY weights /opt/railguard/weights

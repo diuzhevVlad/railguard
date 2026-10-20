@@ -9,6 +9,7 @@ A sample is an 8-channel image: range, x, y, z, intensity, mask, accumulated ran
 """
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +17,11 @@ import torch
 from scipy.spatial import cKDTree
 from torch.utils.data import Dataset
 
-ROWS = 200            # centerline rows: arc length 1..200 m
+# One neural-model range per process. The app infers this from the refiner
+# checkpoint before importing neural modules; standalone/node defaults stay 200.
+ROWS = int(os.environ.get('RAILPATH_ROWS', '200'))
+if ROWS not in (200, 400):
+    raise ValueError('RAILPATH_ROWS must be 200 or 400')
 IGNORE = 255          # segmentation target for pixels without a return or beyond the label horizon
 MAX_VOTE_OFFSET = 12  # metres; pixels farther from the centerline do not vote during training
 

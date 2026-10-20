@@ -2,6 +2,7 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
 import os
+import sys
 import threading
 import time
 import uuid
@@ -12,6 +13,8 @@ from .cloud import xyz_view, FIELD_FORMATS
 from .detection import RailPrediction
 from .scan_detection import ScanDetector
 from .world_map import source_fingerprint
+from railpath.tracked_detection import CANDIDATE_CONFIG, detect_candidates
+from .tracked_bag_detection import prepare_poses, TrackedBagDetector
 
 ROOT = Path(__file__).resolve().parent.parent
 DETECTION_FORWARD_LIMIT_M = 150.0
@@ -81,7 +84,7 @@ def adapt_prediction(out, elapsed_ms=0., device='unknown'):
             status='unavailable';center=np.empty((0,3),np.float32);lengths=np.empty(0,np.float32)
     sigma_values = [float(v) if np.isfinite(v) else None for v in sigma[:end]] if sigma is not None else None
     checked_sigma = sigma[:end][distance <= DETECTION_FORWARD_LIMIT_M] if sigma is not None else None
-    details = dict(source='railguard_model_refiner', status=status, horizon_m=horizon,
+    details = dict(source='railguard_model_refiner', status=status, horizon_m=horizon, model_range_m=len(curve),
                    checked_forward_m=min(DETECTION_FORWARD_LIMIT_M, float(-center[-1,1])) if len(center) else 0.,
                    lookahead_limit_m=DETECTION_FORWARD_LIMIT_M, inference_ms=round(elapsed_ms,2), device=device,
                    sigma_m=sigma_values,
@@ -96,10 +99,11 @@ def adapt_prediction(out, elapsed_ms=0., device='unknown'):
 class RailGuardRuntime:
     """One shared GPU model, serialized access; no frame history or odometry."""
     def __init__(self, weights=None, device=None):
-        self.weights=Path(weights or os.environ.get('OBSTACLE_WEIGHTS_DIR',ROOT/'weights'))
+        self.weights=Path(weights or os.environ.get('OBSTACLE_WEIGHTS_DIR',ROOT/'weights_400'))
         self.device=device or os.environ.get('OBSTACLE_RAIL_DEVICE',os.environ.get('RAILGUARD_DEVICE','auto'))
         self.lock=threading.Lock()
         self.model=None
+        self.range_m=None
 
     def load(self):
         with self.lock:
@@ -109,6 +113,24 @@ class RailGuardRuntime:
                 if not (self.weights/relative).is_file():
                     raise ValueError(f'Missing RailGuard file: {self.weights/relative}')
             import torch
+            # Establish the decoder/refiner geometry before the neural modules
+            # import ROWS. Do not resize/interpolate learned checkpoint tensors.
+            refiner_state=torch.load(self.weights/'refine/last.pt',map_location='cpu',weights_only=True)
+            rows=int(refiner_state['kap_w'].shape[0])-1
+            knots=refiner_state['knots'].numpy().astype(float)
+            if (rows not in (200,400) or not np.array_equal(knots,np.arange(0,rows+1,25))
+                    or tuple(refiner_state['kap_w'].shape)!=(rows+1,len(knots))
+                    or tuple(refiner_state['tok_pe'].shape)!=(rows//4,256)
+                    or tuple(refiner_state['q_embed'].shape)!=(rows//25-1,256)):
+                raise ValueError('Unsupported RailGuard refiner checkpoint geometry')
+            configured=os.environ.get('RAILPATH_ROWS')
+            loaded=sys.modules.get('railpath.data')
+            if ((configured is not None and int(configured)!=rows)
+                    or (loaded is not None and loaded.ROWS!=rows)):
+                raise ValueError(f'Checkpoint requires {rows} m. Restart the process with RAILPATH_ROWS={rows}.')
+            os.environ['RAILPATH_ROWS']=str(rows)
+            self.range_m=rows
+            del refiner_state
             from railpath import RailPath
             from railpath.refiner import RefinerRunner
             if self.device=='auto':
@@ -122,12 +144,12 @@ class RailGuardRuntime:
             if missing:
                 raise ValueError(f'RailGuard checkpoint is missing {len(missing)} model tensors')
             del state
-            model.refiner=RefinerRunner(self.weights/'refine',np.arange(0,201,25,dtype=float),self.weights/'path/best.pt',model.device)
+            model.refiner=RefinerRunner(self.weights/'refine',knots,self.weights/'path/best.pt',model.device)
             # Warm up both networks so the first displayed frame doesn't compile kernels.
             image=np.zeros((8,128,1000),np.float32)
             model.predict_image(image)
-            model.refiner.run(image,np.full(200,-1.1,np.float32),50.,
-                dict(params=np.zeros(11,np.float32),evidence=np.zeros(9,np.float32)))
+            model.refiner.run(image,np.full(rows,-1.1,np.float32),50.,
+                dict(params=np.zeros(len(knots)+2,np.float32),evidence=np.zeros(len(knots),np.float32)))
             self.model=model
 
     def predict(self, msg):
@@ -135,7 +157,7 @@ class RailGuardRuntime:
         started=time.perf_counter()
         xyz,ring=scan_input(msg)
         if not len(xyz):
-            return adapt_prediction(dict(centerline=np.full((200,3),np.nan),sigma=None,horizon=0),device=self.device)
+            return adapt_prediction(dict(centerline=np.full((self.range_m,3),np.nan),sigma=None,horizon=0),device=self.device)
         with self.lock:
             # Sparse-ring interpolation is scan-specific, including after seeks and bag switches.
             self.model.sparse=None
@@ -166,28 +188,34 @@ class LearnedJob:
     progress: float=0.
     message: str='Loading RailGuard model and refiner'
     device: str='pending'
+    model_range_m: int | None=None
+    initial_speed_m_s: float=0.
 
 
 class LearnedDetectionManager:
-    def __init__(self, detector_factory=None):
+    def __init__(self, detector_factory=None, cache_root=None):
         self.runtime=RailGuardRuntime()
         self.factory=detector_factory
         self.jobs={}
         self.detectors={}
         self.lock=threading.Lock()
+        self.cache_root=Path(cache_root or ROOT/'outputs'/'.tracking_poses')
+        self.bags={}
 
-    def start(self,bag_id,bag,topic,train_width_m=2.1,train_height_m=3.0,max_forward_m=150.):
+    def start(self,bag_id,bag,topic,train_width_m=2.1,train_height_m=3.0,max_forward_m=150.,initial_speed_m_s=0.):
         fingerprint=source_fingerprint(bag)
         with self.lock:
             for job in self.jobs.values():
-                if (job.bag_id,job.topic,job.fingerprint,job.train_width_m,job.train_height_m,job.max_forward_m)==(bag_id,topic,fingerprint,train_width_m,train_height_m,max_forward_m) and job.state!='failed':
+                if (job.bag_id,job.topic,job.fingerprint,job.train_width_m,job.train_height_m,job.max_forward_m,job.initial_speed_m_s)==(bag_id,topic,fingerprint,train_width_m,train_height_m,max_forward_m,initial_speed_m_s) and job.state!='failed':
                     return job
             if len(self.jobs)>=16:
                 expired=next((key for key,value in self.jobs.items() if value.state in ('done','failed')),None)
                 if expired:
-                    self.jobs.pop(expired);self.detectors.pop(expired,None)
+                    self.jobs.pop(expired);self.detectors.pop(expired,None);self.bags.pop(expired,None)
             job=LearnedJob(uuid.uuid4().hex,bag_id,topic,fingerprint,train_width_m,train_height_m,max_forward_m)
             self.jobs[job.id]=job
+            job.initial_speed_m_s=initial_speed_m_s
+            self.bags[job.id]=Path(bag)
         threading.Thread(target=self._load,args=(job,),daemon=True).start()
         return job
 
@@ -196,15 +224,28 @@ class LearnedDetectionManager:
             job.state='running';job.progress=.1
             if self.factory is None:
                 self.runtime.load()
-                detector=ScanDetector(LearnedRailProvider(self.runtime))
+                if job.max_forward_m>self.runtime.range_m:
+                    raise ValueError(f'Detection distance exceeds the loaded {self.runtime.range_m} m model')
+                detector=ScanDetector(LearnedRailProvider(self.runtime),
+                                      filter_config=CANDIDATE_CONFIG, candidate_detector=detect_candidates)
                 job.device=self.runtime.device
+                job.model_range_m=self.runtime.range_m
             else:
                 detector=self.factory(job.bag_id,job.topic);job.device='test'
             detector.filter_config=replace(detector.filter_config,train_width_m=job.train_width_m,train_height_m=job.train_height_m)
             detector.max_forward_m=job.max_forward_m
+            if self.factory is None:
+                job.message='Preparing odometry for obstacle confirmation'
+                def progress(value, message):
+                    job.progress=.15+.8*value
+                    job.message=message
+                stamps,poses,resets=prepare_poses(self.bags[job.id],job.topic,job.initial_speed_m_s,
+                                                  self.cache_root,progress)
+                detector=TrackedBagDetector(detector,self.bags[job.id],job.topic,stamps,poses,resets)
             with self.lock:
                 self.detectors[job.id]=detector
-                job.state='done';job.progress=1.;job.message=f'RailGuard + refiner ready ({job.device})'
+                model_label=f' {job.model_range_m} m' if job.model_range_m else ''
+                job.state='done';job.progress=1.;job.message=f'RailGuard{model_label} + refiner ready ({job.device})'
         except Exception as exc:
             job.state='failed';job.message=str(exc)
 

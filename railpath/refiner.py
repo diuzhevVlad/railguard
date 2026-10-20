@@ -103,8 +103,9 @@ def conv_block(cin, cout, stride):
 
 
 class Refiner(nn.Module):
-    def __init__(self, knots, dim=256, heads=4, layers=3, M=7, n_iter=2, drop=0.1, az_min=220.0, az_step=0.1, width=1000, height=128):
+    def __init__(self, knots, dim=256, heads=4, layers=3, M=None, n_iter=2, drop=0.1, az_min=220.0, az_step=0.1, width=1000, height=128):
         super().__init__()
+        M = ROWS // 25 - 1 if M is None else M
         self.M, self.n_iter, self.dim = M, n_iter, dim
         self.register_buffer('knots', torch.tensor(knots, dtype=torch.float32))      # fixed decode grid (kappa rows, evidence)
         self.K = len(knots)
@@ -122,7 +123,7 @@ class Refiner(nn.Module):
         cin = 3 + 16 + 1 + 2
         self.unroll_cnn = nn.Sequential(conv_block(cin, 64, (1, 2)), conv_block(64, 128, (2, 2)), conv_block(128, 128, (2, 2)))   # (200,40) -> (50,5)
         self.tok = nn.Linear(128 * 5 + 5, dim)
-        self.tok_pe = nn.Parameter(torch.randn(50, dim) * 0.02)
+        self.tok_pe = nn.Parameter(torch.randn(ROWS // 4, dim) * 0.02)
         self.q_embed = nn.Parameter(torch.randn(M, dim) * 0.02)
         self.q_state = nn.Linear(8, dim)
         self.val_proj = nn.ModuleList([nn.Conv2d(16, dim, 1), nn.Conv2d(256, dim, 1)])

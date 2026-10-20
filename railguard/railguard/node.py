@@ -13,6 +13,9 @@ from visualization_msgs.msg import Marker
 from railpath import RailPath
 from railpath.bag_io import unpack
 from railpath.obstacle_filter import ObstacleFilterConfig, detect_obstacles
+from railpath.tracked_detection import CANDIDATE_CONFIG, detect_candidates, StreamingConfirmation
+from railpath.tracking_odometry import TrackingOdometry
+from railpath.obstacle_tracking import TRACKING_SETTINGS
 
 
 class RailGuardNode(Node):
@@ -23,13 +26,23 @@ class RailGuardNode(Node):
                               drop_intensity=self.declare_parameter('drop_intensity', True).value)
         self.pub_path = self.create_publisher(Path, '/railguard/centerline', 1)
         self.pub_rails = self.create_publisher(PointCloud2, '/railguard/rails', 1)
-        defaults = ObstacleFilterConfig()
+        defaults = CANDIDATE_CONFIG
         self.obstacle_config = ObstacleFilterConfig(**{
             name: self.declare_parameter(name, getattr(defaults, name)).value
             for name in ('train_width_m', 'train_height_m', 'min_forward_m',
                          'min_height_above_track_m', 'near_min_height_above_track_m',
-                         'near_height_distance_m', 'min_cluster_points')})
+                         'near_height_distance_m', 'min_cluster_points',
+                         'count_unique_xyz')},
+            stabilize_envelope=False, min_near_component_extent_m=0.)
         self.max_forward_m = self.declare_parameter('max_forward_m', 150.0).value
+        settings = dict(TRACKING_SETTINGS)
+        for name in ('match_distance_m', 'minimum_hits', 'window_scans', 'immediate_unique_points_gt', 'max_gap_s'):
+            settings[name] = self.declare_parameter('tracking_' + name, settings[name]).value
+        self.confirmation = StreamingConfirmation(settings)
+        self.odometry = TrackingOdometry(
+            self.declare_parameter('initial_speed_m_s', 0.).value, settings['max_gap_s'])
+        self.sensor_frame = None
+        self.pub_candidates = self.create_publisher(PointCloud2, '/railguard/obstacle_candidates', 1)
         self.pub_obstacles = self.create_publisher(PointCloud2, '/railguard/obstacles', 1)
         self.pub_detected = self.create_publisher(Bool, '/railguard/obstacle_detected', 1)
         self.pub_distance = self.create_publisher(Float32, '/railguard/obstacle_distance', 1)
@@ -40,17 +53,30 @@ class RailGuardNode(Node):
 
     def on_cloud(self, msg):
         xyz, intensity, ring, valid = unpack(msg)
+        stamp = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        if msg.header.frame_id != self.sensor_frame:
+            self.sensor_frame = msg.header.frame_id
+            self.odometry.reset()
+            self.confirmation.reset()
+        pose, reset = self.odometry.update(xyz[valid], stamp)
+        if reset:
+            self.confirmation.reset()
+        self.model.sparse = None
         out = self.model.predict(xyz[valid], intensity[valid], ring[valid] if ring is not None else None)
+        candidate = detect_obstacles(xyz[valid], out['centerline'], out['rails'],
+                                     self.obstacle_config, self.max_forward_m,
+                                     candidate_detector=detect_candidates)
+        detection = self.confirmation.update(stamp, candidate, pose)
+        self.pub_candidates.publish(point_cloud2.create_cloud_xyz32(msg.header, candidate.points))
+        centerline=detection.prediction.center if detection.prediction is not None else out['centerline']
         path = Path(header=msg.header)
-        for x, y, z in out['centerline']:
+        for x, y, z in centerline:
             if x == x:                                             # skip NaN (beyond the supported range without the refiner)
                 pose = PoseStamped(header=msg.header)
                 pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = float(x), float(y), float(z)
                 path.poses.append(pose)
         self.pub_path.publish(path)
         self.pub_rails.publish(point_cloud2.create_cloud_xyz32(msg.header, out['rails']))
-        detection = detect_obstacles(xyz[valid], out['centerline'], out['rails'],
-                                     self.obstacle_config, self.max_forward_m)
         self.pub_obstacles.publish(point_cloud2.create_cloud_xyz32(msg.header, detection.points))
         self.pub_detected.publish(Bool(data=detection.detected))
         self.pub_distance.publish(Float32(data=detection.distance_m if detection.detected else float('nan')))

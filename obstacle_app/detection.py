@@ -17,7 +17,7 @@ from railpath.obstacle_filter import (
     RailPrediction, ObstacleDetection, ObstacleFilterConfig,
     detect_obstacle_points, envelope_candidates,
 )
-from .cloud import valid_xyz
+from .cloud import valid_xyz, normalize_axes
 from .core import Progress
 from .merged_rails import MergedRailMap, merge_rails, world_rail_observation
 from .rails import detect_rail_points
@@ -149,7 +149,7 @@ def build_merged_rail_map(bag: Path, topic: str, initial_speed_m_s: float,
             raise ValueError("Select one PointCloud2 topic")
         total = max(1, matches[0].msgcount)
         for _, bag_ns, raw in reader.messages(connections=matches):
-            xyz = valid_xyz(reader.deserialize(raw, matches[0].msgtype))
+            xyz = valid_xyz(normalize_axes(reader.deserialize(raw, matches[0].msgtype), topic))
             if len(poses) == 1:
                 odometry.last_delta[1, 3] = -initial_speed_m_s * 0.1
             odometry.register_frame(xyz[::8].astype(np.float64),

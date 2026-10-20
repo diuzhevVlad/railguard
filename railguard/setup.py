@@ -15,7 +15,7 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/rviz', glob('rviz/*.rviz')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'kiss-icp>=1.3,<2', 'typer[all]>=0.6,<0.10'],
     zip_safe=True,
     maintainer='RailGuard team',
     maintainer_email='vladdiuzhev@gmail.com',

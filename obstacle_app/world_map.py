@@ -12,7 +12,7 @@ import numpy as np
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
-from .cloud import valid_xyz
+from .cloud import valid_xyz, normalize_axes
 from .mesh import load_collada_mesh
 
 MAX_MAP_POINTS = 500_000
@@ -31,6 +31,7 @@ def file_digest(path):
 def validate_map(directory, bag, topic, bag_id=None):
     manifest = json.loads((directory/"manifest.json").read_text())
     if (manifest["topic"] != topic or manifest["source_fingerprint"] != source_fingerprint(bag)
+            or (topic in ("/iv_points", "iv_points") and manifest.get("axes") != "iv-minus-y-v1")
             or (bag_id is not None and manifest["bag_id"] != bag_id)
             or manifest["map_id"] != directory.name
             or manifest["poses_sha256"] != file_digest(directory/"poses.npz")):
@@ -126,7 +127,8 @@ class WorldMapManager:
             if prediction.state != "done":
                 raise ValueError(prediction.message)
             digest = file_digest(prediction.map_path)
-            map_id = hashlib.sha256(json.dumps(["world-v2", job.bag_id, job.topic, job.fingerprint, digest, job.initial_speed_m_s]).encode()).hexdigest()[:32]
+            version = "world-v3-iv-axes" if job.topic in ("/iv_points", "iv_points") else "world-v2"
+            map_id = hashlib.sha256(json.dumps([version, job.bag_id, job.topic, job.fingerprint, digest, job.initial_speed_m_s]).encode()).hexdigest()[:32]
             directory = self.root/map_id
             if directory.exists():
                 try:
@@ -149,7 +151,7 @@ class WorldMapManager:
                     for _, stamp, raw in reader.messages(connections=connections):
                         if count >= len(stamps) or stamp != stamps[count]:
                             raise ValueError("Cached map poses do not match the source scan timestamps")
-                        msg = reader.deserialize(raw, connections[0].msgtype)
+                        msg = normalize_axes(reader.deserialize(raw, connections[0].msgtype), job.topic)
                         xyz = valid_xyz(msg, stride=max(1, (msg.width*msg.height)//5000))[:5000]
                         world = (xyz @ poses[count, :3, :3].T+poses[count, :3, 3]).astype(np.float32)
                         pool = np.concatenate((pool, world))
@@ -166,6 +168,7 @@ class WorldMapManager:
                 if source_fingerprint(bag) != job.fingerprint:
                     raise ValueError("Source changed while preparing map")
                 (working/"manifest.json").write_text(json.dumps(dict(map_id=map_id, bag_id=job.bag_id,
+                    axes="iv-minus-y-v1" if job.topic in ("/iv_points", "iv_points") else "source",
                     topic=job.topic, source_fingerprint=job.fingerprint, poses_sha256=digest, initial_speed_m_s=job.initial_speed_m_s)))
                 working.rename(directory)
                 working = None
