@@ -93,6 +93,19 @@ class RailPath:
         self.drop_intensity = drop_intensity
         self.weights, self.refiner_dir, self.refiner, self.sparse = weights, Path(refiner) if refiner else None, None, None
 
+    def warmup(self):
+        """Initialize both networks before consuming a live scan (same as the app)."""
+        image = np.zeros((8, 128, 1000), np.float32)
+        if self.refiner_dir is not None:
+            from .refiner import RefinerRunner
+            state = torch.load(self.refiner_dir / 'last.pt', map_location='cpu', weights_only=True)
+            knots = state['knots'].numpy().astype(float)
+            self.refiner = RefinerRunner(self.refiner_dir, knots, self.weights, self.device)
+        self.predict_image(image)
+        if self.refiner is not None:
+            self.refiner.run(image, np.full(self.rows, -1.1, np.float32), 50.,
+                dict(params=np.zeros(len(knots)+2, np.float32), evidence=np.zeros(len(knots), np.float32)))
+
     def predict_image(self, image):
         """Run on a prepared 8-channel image (e.g. a training-cache frame)."""
         image = image.copy()

@@ -3,13 +3,16 @@
     # Shared by detection and KISS-ICP. Change this once for both nodes.
     input_topic: /lidar_points                        # doubleT_obstacle: /sensing/lidar/hesai128/pointcloud
     odometry_topic: /railguard/odometry
+    processed_cloud_topic: /railguard/registered_points
     tracking_max_gap_s: 2.0
 
 railguard_odometry:
   ros__parameters:
-    # Registration: online defaults of the node (point_stride 8, deskew false, min_distance_m 0.5, all cores). The web app
-    # registers offline with stride 1 and deskew; those were slower than real time here and deskew shortened the track.
-    initial_speed_m_s: 0.0
+    # Same registration settings as the app. Speed is mandatory in the launch command.
+    point_stride: 1
+    deskew: true
+    min_distance_m: 0.0
+    max_num_threads: 2
     odometry_frame: railguard_odom
 
 railguard_node:
@@ -29,7 +32,7 @@ railguard_node:
     count_unique_xyz: true                          # duplicate XYZ records do not add cluster support
     # Odometry aligns candidate groups; neural inference still uses one scan.
     odometry_wait_s: 0.5                            # missing poses break temporal support
-    odometry_queue_size: 10                         # bounded pending scan/pose joins
+    odometry_queue_size: 100                         # bounded pending scan/pose joins
     tracking_match_distance_m: 1.0
     tracking_window_scans: 5
     tracking_minimum_hits: 4

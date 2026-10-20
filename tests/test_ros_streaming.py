@@ -28,7 +28,7 @@ class TestRosStreaming(unittest.TestCase):
         class FakeModel:
             def __init__(self, *args, **kwargs):
                 pass
-            def predict(self, *args):
+            def predict(self, *args, **kwargs):
                 d = np.arange(151, dtype=np.float32)
                 return dict(centerline=np.column_stack([d*0, -d, d*0]), rails=np.empty((0, 3)))
         with patch.object(module, 'RailPath', FakeModel):
@@ -80,6 +80,23 @@ class TestRosStreaming(unittest.TestCase):
         self.node.on_odometry(self.pose(msg, 'new_world'))
         self.node.on_cloud(msg)
         self.assertFalse(self.results[-1].detected)
+
+    def test_envelope_topic_matches_detection_dimensions_and_clearance(self):
+        from types import SimpleNamespace
+        from railguard.node import RailGuardNode
+        markers = []
+        self.node.pub_envelope = SimpleNamespace(publish=markers.append)
+        msg = self.cloud(0)
+        self.node.on_odometry(self.pose(msg))
+        self.node.on_cloud(msg)
+        RailGuardNode.publish_detection(self.node, msg.header, self.results[-1])
+        marker = markers[-1]
+        self.assertEqual(marker.header, msg.header)
+        self.assertTrue(marker.points)
+        xyz = np.array([[p.x, p.y, p.z] for p in marker.points])
+        self.assertAlmostEqual(float(np.ptp(xyz[:, 0])), 2.1, places=5)
+        self.assertAlmostEqual(float(xyz[:, 2].min()), .1, places=5)
+        self.assertAlmostEqual(float(xyz[:, 2].max()), 3.2, places=5)
 
     def test_missing_pose_keeps_immediate_rule_but_breaks_support(self):
         now = [0.]

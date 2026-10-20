@@ -22,5 +22,6 @@ setup(
     description='RailGuard: track centerline to 200 m from a single metro-tunnel LiDAR scan.',
     license='Proprietary',
     entry_points={'console_scripts': ['railguard_node = railguard.node:main',
-                                        'railguard_odometry = railguard.odometry_node:main']},
+                                        'railguard_odometry = railguard.odometry_node:main',
+                                        'railguard_play = railguard.play_detection:main']},
 )

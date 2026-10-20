@@ -1,6 +1,16 @@
 from railpath.pose_sync import PoseSynchronizer
 
 
+def test_startup_keeps_poses_that_arrive_during_first_inference():
+    emitted = []
+    sync = PoseSynchronizer(lambda *args: emitted.append(args), lambda: None)
+    for i in range(5):
+        sync.add_pose(i, 'lidar', f'pose{i}')
+    for i in range(5):
+        sync.add_cloud(i, 'lidar', f'scan{i}')
+    assert emitted == [(i, f'scan{i}', f'pose{i}') for i in range(5)]
+
+
 def test_exact_timestamps_either_arrival_order_and_ordered_output():
     emitted, resets = [], []
     sync = PoseSynchronizer(lambda *args: emitted.append(args), lambda: resets.append(1))

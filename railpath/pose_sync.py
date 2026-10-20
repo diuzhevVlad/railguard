@@ -19,12 +19,15 @@ class PoseSynchronizer:
     def add_cloud(self, stamp, frame, value):
         if (self.sensor_frame != frame or
                 (self.last_cloud is not None and stamp <= self.last_cloud)):
-            # Retain only an already arrived pose for this exact first/restart scan.
-            pose = self.poses.get((stamp, frame))
+            # At startup odometry can run ahead while the first inference warms up.
+            # Preserve those future poses; on rewind retain only the exact match
+            # to avoid reusing poses from the previous playback epoch.
+            retained = OrderedDict((key, value) for key, value in self.poses.items()
+                                   if key == (stamp, frame) or
+                                   (self.last_cloud is None and key[1] == frame and key[0] >= stamp))
             self.pending.clear()
             self.poses.clear()
-            if pose is not None:
-                self.poses[(stamp, frame)] = pose
+            self.poses.update(retained)
             self.reset()
         self.sensor_frame, self.last_cloud = frame, stamp
         self.pending[(stamp, frame)] = (self.clock(), value)

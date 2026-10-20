@@ -1,12 +1,14 @@
 """RailGuard node: scan in; track, rails, and filtered obstacle detections out."""
 
 import threading
+import os
+import torch
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Point
 from nav_msgs.msg import Path, Odometry
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -30,8 +32,13 @@ class RailGuardNode(Node):
     def __init__(self):
         super().__init__('railguard_node')
         topic = self.declare_parameter('input_topic', '/lidar_points').value
+        torch.set_num_threads(max(1, min(int(os.environ.get('RAILGUARD_CPU_THREADS', '4')), os.cpu_count() or 1)))
         self.model = RailPath(self.declare_parameter('weights', '').value, self.declare_parameter('refiner', '').value or None,
                               drop_intensity=self.declare_parameter('drop_intensity', True).value)
+        if hasattr(self.model, 'warmup'):
+            self.get_logger().info('Warming up model and refiner before accepting scans')
+            self.model.warmup()
+        self.pub_envelope = self.create_publisher(Marker, '/railguard/train_envelope', 1)
         self.pub_path = self.create_publisher(Path, '/railguard/centerline', 1)
         self.pub_rails = self.create_publisher(PointCloud2, '/railguard/rails', 1)
         defaults = CANDIDATE_CONFIG
@@ -52,7 +59,7 @@ class RailGuardNode(Node):
         # (large groups), exactly what the odometry mode falls back to when a pose is missing.
         self.use_odometry = self.declare_parameter('use_odometry', True).value
         self.pose_sync = PoseSynchronizer(self.on_aligned, self.reset_tracking,
-            max_pending=self.declare_parameter('odometry_queue_size', 10).value,
+            max_pending=self.declare_parameter('odometry_queue_size', 100).value,
             timeout_s=self.declare_parameter('odometry_wait_s', .5).value)
         # Inference blocks its callback for ~0.2 s per scan. Poses are received in their own callback group so that the
         # executor (two threads, see main) keeps taking them meanwhile; otherwise the pose queue lags behind the scans and
@@ -62,21 +69,29 @@ class RailGuardNode(Node):
         self.create_timer(.02, self.flush_poses, callback_group=self.pose_group)
         odometry_topic = self.declare_parameter('odometry_topic', '/railguard/odometry').value
         self.create_subscription(Odometry, odometry_topic, self.on_odometry,
-            QoSProfile(depth=50, reliability=ReliabilityPolicy.BEST_EFFORT), callback_group=self.pose_group)
+            QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE), callback_group=self.pose_group)
+        self.pub_detection_cloud = self.create_publisher(PointCloud2, '/railguard/detection_points',
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.pub_candidates = self.create_publisher(PointCloud2, '/railguard/obstacle_candidates', 1)
         self.pub_obstacles = self.create_publisher(PointCloud2, '/railguard/obstacles', 1)
         self.pub_detected = self.create_publisher(Bool, '/railguard/obstacle_detected', 1)
         self.pub_distance = self.create_publisher(Float32, '/railguard/obstacle_distance', 1)
         self.pub_nearest = self.create_publisher(Marker, '/railguard/nearest_obstacle', 1)
-        # depth 1: while a scan is processed only the newest one waits, so the node never falls behind the sensor
-        self.create_subscription(PointCloud2, topic, self.on_cloud, QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+        # Consume only scans for which KISS-ICP has published a matching pose.
+        if self.use_odometry:
+            topic = self.declare_parameter('processed_cloud_topic', '/railguard/registered_points').value
+        # Preserve consecutive scans, as the app does. Pace bag playback when
+        # processing cannot keep up; latest-only inference changes confirmation.
+        self.create_subscription(PointCloud2, topic, self.on_cloud,
+            QoSProfile(depth=20, reliability=ReliabilityPolicy.RELIABLE))
         self.get_logger().info(f'listening on {topic}' + ('' if self.use_odometry else ' (single-scan mode, no odometry)'))
 
     def on_cloud(self, msg):
         xyz, intensity, ring, valid = unpack(msg)
         stamp = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
         self.model.sparse = None
-        out = self.model.predict(xyz[valid], intensity[valid], ring[valid] if ring is not None else None)
+        model_valid = valid & (np.einsum('ij,ij->i', xyz, xyz) > .25)
+        out = self.model.predict(xyz[model_valid], ring=ring[model_valid] if ring is not None else None)
         candidate = detect_obstacles(xyz[valid], out['centerline'], out['rails'],
                                      self.obstacle_config, self.max_forward_m,
                                      candidate_detector=detect_candidates)
@@ -91,10 +106,11 @@ class RailGuardNode(Node):
         self.pub_path.publish(path)
         self.pub_rails.publish(point_cloud2.create_cloud_xyz32(msg.header, out['rails']))
         if not self.use_odometry:
+            self.pub_detection_cloud.publish(msg)
             self.publish_detection(msg.header, confirm_detection(candidate, [(0, stamp, candidate.points, np.eye(4))], self.confirmation.settings))
             return
         with self.sync_lock:
-            self.pose_sync.add_cloud(stamp, msg.header.frame_id, (msg.header, candidate))
+            self.pose_sync.add_cloud(stamp, msg.header.frame_id, (msg, candidate))
 
     def flush_poses(self):
         with self.sync_lock:
@@ -122,7 +138,8 @@ class RailGuardNode(Node):
             self.pose_sync.add_pose(stamp, msg.child_frame_id, (msg.header.frame_id, matrix))
 
     def on_aligned(self, stamp, value, odometry):
-        header, candidate = value
+        msg, candidate = value
+        header = msg.header
         if odometry is None:
             # Do not guess a transform. Large current groups still satisfy the
             # immediate rule; small groups cannot acquire temporal confirmation.
@@ -136,9 +153,44 @@ class RailGuardNode(Node):
                 self.confirmation.reset()
                 self.odom_epoch = epoch
             detection = self.confirmation.update(stamp, candidate, matrix)
+        self.pub_detection_cloud.publish(msg)
         self.publish_detection(header, detection)
 
     def publish_detection(self, header, detection):
+        envelope = Marker()
+        envelope.header = header
+        envelope.ns = 'train_envelope'
+        envelope.id = 0
+        envelope.type = Marker.LINE_LIST
+        envelope.pose.orientation.w = 1.
+        envelope.scale.x = .025
+        envelope.color.r, envelope.color.g, envelope.color.b, envelope.color.a = .2, .9, .4, .8
+        prediction = detection.prediction
+        center = prediction.center if prediction is not None else np.empty((0, 3))
+        center = center[np.isfinite(center).all(axis=1)]
+        center = center[(-center[:, 1] >= self.obstacle_config.min_forward_m) &
+                        (-center[:, 1] <= self.max_forward_m)]
+        if len(center) < 2:
+            envelope.action = Marker.DELETE
+        else:
+            cfg = self.obstacle_config
+            center = center.copy()
+            center[:, 2] += np.where(-center[:, 1] <= cfg.near_height_distance_m,
+                                     cfg.near_min_height_above_track_m, cfg.min_height_above_track_m)
+            tangent = np.gradient(center[:, :2], axis=0)
+            normal = np.column_stack([tangent[:, 1], -tangent[:, 0], np.zeros(len(center))])
+            normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-9)
+            corners = [center + side*cfg.train_width_m/2*normal + [0, 0, height]
+                       for side, height in [(-1, 0), (1, 0), (1, cfg.train_height_m), (-1, cfg.train_height_m)]]
+            segments = []
+            for edge in corners:
+                segments.extend(zip(edge[:-1], edge[1:]))
+            for i in (0, len(center)-1):
+                segments.extend((corners[j][i], corners[(j+1)%4][i]) for j in range(4))
+            envelope.points = [Point(x=float(p[0]), y=float(p[1]), z=float(p[2]))
+                               for segment in segments for p in segment]
+        self.pub_envelope.publish(envelope)
+
         self.pub_obstacles.publish(point_cloud2.create_cloud_xyz32(header, detection.points))
         self.pub_detected.publish(Bool(data=detection.detected))
         self.pub_distance.publish(Float32(data=detection.distance_m if detection.detected else float('nan')))
