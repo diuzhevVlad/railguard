@@ -1,10 +1,6 @@
 # RailGuard
 
-Мы представляем два прототипа нашего решения: веб-приложение для работы с записями LiDAR в браузере и ROS 2-ноду для обработки облака точек и просмотра результатов в RViz. Оба используют общий код модели и фильтрации в `railpath/`.
-
-[Единая документация (DOCX): руководство пользователя, модель, методика оценки, ограничения и дальнейшее развитие](docs/RailGuard%20Documentation.docx).
-
-[Пересохранённая версия DOCX для импорта в Google Docs](docs/RailGuard%20Google%20Docs.docx).
+Мы представляем два интерфейса для прототипа нашего решения: веб-приложение для работы с записями LiDAR в браузере и ROS 2-ноду для обработки облака точек и просмотра результатов в RViz. Оба используют общий код модели и фильтрации в `railpath/`.
 
 ## Структура репозитория
 
@@ -24,10 +20,6 @@ docker compose up -d --build web
 ```
 
 Откройте [http://127.0.0.1:8000](http://127.0.0.1:8000).
-
-[Краткая инструкция со скриншотами: детекция и добавление препятствий](docs/USER_GUIDE.md).
-
-[Скачать инструкцию в формате DOCX](docs/RailGuard%20User%20Guide.docx).
 
 ### Начальная скорость KISS-ICP
 
@@ -67,7 +59,7 @@ docker compose logs -f node
 
 ```sh
 docker compose exec node bash -ic 'rviz2 -d /opt/railguard/ws/install/railguard/share/railguard/rviz/railguard.rviz'
-docker compose exec node bash -ic 'ros2 bag play /bags/doubleT_platform'
+docker compose exec node bash -ic 'ros2 bag play /bags/cloud_with_fake_obj'
 ```
 
 ### Выходные топики ноды
@@ -89,3 +81,9 @@ docker compose start node
 ```
 
 Остановить сервисы: `docker compose stop web node`.
+
+## Загрузка образов из архива
+
+```sh
+docker load -i railguard-images.tar.zst
+```

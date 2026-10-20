@@ -1,7 +1,8 @@
 name: railguard
 services:
   web:
-    image: railguard-web
+    image: railguard-web:latest
+    pull_policy: never
     build:
       context: .
       dockerfile: Dockerfile.web
@@ -26,6 +27,8 @@ services:
       - ./400m_weights:/models/400m_weights:ro
     restart: unless-stopped
   node:
+    image: railguard-node:latest
+    pull_policy: never
     build:
       context: .
       dockerfile: Dockerfile
@@ -43,7 +46,7 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ./data:/bags:ro
-      - ./outputs:/bags/outputs:ro
+      - ./weights:/opt/railguard/weights:ro
       - ./railguard/config:/opt/railguard/config:ro
     command: ["ros2", "launch", "railguard", "railguard.launch.py", "config:=/opt/railguard/config/railguard.yaml"]
     restart: unless-stopped
