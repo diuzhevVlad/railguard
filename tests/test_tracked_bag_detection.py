@@ -1,6 +1,7 @@
 from dataclasses import replace
 from pathlib import Path
 import time
+import pytest
 
 import numpy as np
 from rosbags.rosbag2 import Writer
@@ -8,7 +9,7 @@ from rosbags.typesys import Stores, get_typestore
 
 from obstacle_app.cloud import valid_xyz
 from obstacle_app.scan_detection import ScanDetector
-from obstacle_app.tracked_bag_detection import TrackedBagDetector
+from obstacle_app.tracked_bag_detection import TrackedBagDetector, BagOdometry
 from railpath.obstacle_filter import RailPrediction
 from railpath.tracked_detection import CANDIDATE_CONFIG, detect_candidates
 
@@ -48,12 +49,12 @@ def poses():
 
 
 class Odom:
-    def __init__(self, speed=0.):
+    def __init__(self, speed=0., **settings):
         self.calls = []
         self.previous = None
     def reset(self):
         self.previous = None
-    def update(self, xyz, stamp):
+    def update(self, xyz, stamp, point_timestamps=None):
         reset = self.previous is None or not 0 < stamp-self.previous <= 2e9
         self.previous = stamp
         self.calls.append(stamp)
@@ -62,89 +63,111 @@ class Odom:
         return pose, reset
 
 
-def test_online_history_pause_seek_and_session_isolation(tmp_path):
-    frames = make_bag(tmp_path/'bag')
-    calls = []
+def raw_detector():
     class Provider:
         def predict(self, stamp, msg):
-            calls.append(stamp)
             return prediction()
-    raw = ScanDetector(Provider(), filter_config=CANDIDATE_CONFIG, candidate_detector=detect_candidates)
-    stamps = poses()[0]
-    detector = TrackedBagDetector(raw, odometry_factory=Odom)
-    # Starting at the end does not read any hidden history.
-    assert not detector.detect(int(stamps[7]), frames[7])[1].detected
-    assert calls == [int(stamps[7])]
-    for i in range(8):
-        result = detector.detect(int(stamps[i]), frames[i])
-        found = result[1]
-        assert found.detected == (i >= 3)
-        np.testing.assert_array_equal(found.candidate_points, valid_xyz(frames[i]))
-        assert found.tracks[0]['hits'] == min(i+1, 5)
-        assert detector.detect(int(stamps[i]), frames[i]) is result
-    assert len(detector.odometry.calls) == 9  # paused refreshes never run ICP
-    assert len(calls) == 8  # raw neural cache may be shared
-    other = TrackedBagDetector(raw, odometry_factory=Odom)
-    assert not other.detect(int(stamps[7]), frames[7])[1].detected
-    # A gap, rewind, or changed sensor frame cannot inherit confirmation.
-    assert not detector.detect(int(stamps[7]+3e9), frames[7])[1].detected
-    assert not detector.detect(int(stamps[0]), frames[0])[1].detected
-    frames[0].header.frame_id = 'another_lidar'
-    assert not detector.detect(int(stamps[0]), frames[0])[1].detected
+    return ScanDetector(Provider(), filter_config=CANDIDATE_CONFIG, candidate_detector=detect_candidates)
 
 
-def test_web_job_no_prepass_and_each_websocket_owns_history(tmp_path, monkeypatch):
+def test_incremental_rewind_complete_cache_and_no_skipped_odometry(tmp_path):
+    bag=tmp_path/'bag'
+    frames=make_bag(bag)
+    stamps=poses()[0]
+    odom=BagOdometry(bag,'/lidar_points',3.,tmp_path/'cache',Odom)
+    detector=TrackedBagDetector(raw_detector(),odom)
+    assert odom.status()['processed_scans']==0
+    assert not odom.odometry.calls
+    with pytest.raises(ValueError,match='Forward seeking'):
+        detector.detect(int(stamps[7]),frames[7])
+    with pytest.raises(ValueError,match='Forward seeking'):
+        detector.validate_start(.1)
+    for i in range(4):
+        result=detector.detect(int(stamps[i]),frames[i])
+        assert result[1].detected==(i>=3)
+    assert len(odom.odometry.calls)==4
+    assert not detector.detect(int(stamps[0]),frames[0])[1].detected
+    assert detector.detect(int(stamps[3]),frames[3])[1].detected
+    # Another job/browser can replay a processed scan without changing ICP.
+    other=TrackedBagDetector(raw_detector(),odom)
+    assert other.detect(int(stamps[3]),frames[3])[1].detected
+    assert len(odom.odometry.calls)==4
+    with pytest.raises(ValueError,match='Forward seeking'):
+        detector.detect(int(stamps[5]),frames[5])
+    for i in range(4,8):
+        assert detector.detect(int(stamps[i]),frames[i])[1].detected
+    assert odom.status()['complete'] and odom.path.exists()
+    assert len(odom.odometry.calls)==8
+    odom.close()
+    cached=BagOdometry(bag,'/lidar_points',3.,tmp_path/'cache',Odom)
+    assert cached.status()['complete'] and not cached.odometry.calls
+    cached.validate_start(.7)
+    assert TrackedBagDetector(raw_detector(),cached).detect(int(stamps[7]),frames[7])[1].detected
+    different=BagOdometry(bag,'/lidar_points',5.,tmp_path/'cache',Odom)
+    assert not different.status()['complete']
+    assert cached.path!=different.path
+    cached.close();different.close()
+
+
+def test_partial_cache_does_not_resume_without_icp_state(tmp_path):
+    frames=make_bag(tmp_path/'bag')
+    args=(tmp_path/'bag','/lidar_points',3.,tmp_path/'cache',Odom)
+    odom=BagOdometry(*args)
+    odom.ensure(int(poses()[0][0]),frames[0])
+    assert not odom.path.exists()
+    odom.close()
+    restarted=BagOdometry(*args)
+    assert restarted.status()['processed_scans']==0
+    restarted.close()
+
+
+def test_web_seeking_and_normal_viewer_are_independent(tmp_path,monkeypatch):
     from fastapi.testclient import TestClient
-    from obstacle_app import learned_detection
+    from obstacle_app import model_worker,tracked_bag_detection
     from obstacle_app.web import create_app
-    data, output = tmp_path/'data', tmp_path/'output'
-    data.mkdir()
-    output.mkdir()
-    make_bag(data/'bag')
+    data,output=tmp_path/'data',tmp_path/'output'
+    data.mkdir();output.mkdir();make_bag(data/'bag')
+    make_bag(data/'cloud_with_fake_obj')
     class Runtime:
-        device = 'test'
-        range_m = 200
-        def __init__(self, *args):
-            pass
-        def close(self):
-            pass
-        def load(self):
-            pass
-        def predict(self, msg):
-            return prediction()
-    from obstacle_app import model_worker
-    monkeypatch.setattr(model_worker, 'ProcessRailRuntime', Runtime)
-    from obstacle_app import tracked_bag_detection
-    monkeypatch.setattr(tracked_bag_detection, 'TrackingOdometry', Odom)
-    client = TestClient(create_app(data_root=data, output_root=output))
-    response = client.post('/api/detections', json={'bag_id':'source/bag','topic':'/lidar_points'})
-    assert response.status_code == 202
-    job = response.json()
-    for _ in range(100):
-        job = client.get('/api/detections/'+job['id']).json()
-        if job['state'] in ('done','failed'):
-            break
-        time.sleep(.01)
-    assert job['state'] == 'done', job
-    stamps = poses()[0]
-    for i in (7,0,3):
-        result = client.get(f"/api/detections/{job['id']}/frame", params={'timestamp_ns':int(stamps[i])}).json()
-        assert not result['detected'], result
-        assert result['raw_candidate_points'] == 4
-        assert len(result['unconfirmed_xyz']) == 4
-    with client.websocket_connect(f"/ws/playback?bag_id=source/bag&topic=/lidar_points&detection_id={job['id']}") as ws:
-        frame = ws.receive_json()
-        cloud = ws.receive_bytes()
-        assert frame['type'] == 'frame' and not frame['detected']
-        assert len(frame['unconfirmed_xyz']) == 4
-        assert len(cloud) == frame['points']*12
-
-        for i in range(1, 8):
-            frame = ws.receive_json()
-            ws.receive_bytes()
-            assert frame['detected'] == (i >= 3)
-        with client.websocket_connect(f"/ws/playback?bag_id=source/bag&topic=/lidar_points&detection_id={job['id']}&start=0.7") as other:
-            frame = other.receive_json()
-            other.receive_bytes()
-            assert not frame['detected']
-    assert not (output/'.tracking_poses').exists()
+        device='test'
+        range_m=200
+        def __init__(self,*args):pass
+        def load(self):pass
+        def close(self):pass
+        def predict(self,msg):return prediction()
+    monkeypatch.setattr(model_worker,'ProcessRailRuntime',Runtime)
+    monkeypatch.setattr(tracked_bag_detection,'TrackingOdometry',Odom)
+    with TestClient(create_app(data_root=data,output_root=output)) as client:
+        info=client.get('/api/info',params={'bag_id':'source/cloud_with_fake_obj'}).json()
+        assert info['detection_initial_speed_m_s']==0 and info['detection_speed_fixed']
+        assert info['initial_speed_m_s']==3  # Simulation settings remain separate.
+        info=client.get('/api/info',params={'bag_id':'source/bag'}).json()
+        assert not info['detection_speed_fixed']
+        job=client.post('/api/detections',json={'bag_id':'source/bag','topic':'/lidar_points'}).json()
+        for _ in range(100):
+            job=client.get('/api/detections/'+job['id']).json()
+            if job['state'] in ('done','failed'):break
+            time.sleep(.01)
+        assert job['state']=='done',job
+        assert job['odometry']['processed_scans']==0
+        base='/ws/playback?bag_id=source/bag&topic=/lidar_points'
+        detected=base+'&detection_id='+job['id']
+        with client.websocket_connect(detected+'&start=0.7') as ws:
+            assert ws.receive_json()['type']=='error'
+        # Detection off always permits arbitrary seeks and does not advance ICP.
+        with client.websocket_connect(base+'&start=0.7') as ws:
+            frame=ws.receive_json();ws.receive_bytes()
+            assert frame['odometry'] is None
+        assert client.get('/api/detections/'+job['id']).json()['odometry']['processed_scans']==0
+        assert client.get(f"/api/detections/{job['id']}/frame",params={'timestamp_ns':int(poses()[0][7])}).status_code==400
+        with client.websocket_connect(detected) as ws:
+            for i in range(8):
+                frame=ws.receive_json();ws.receive_bytes()
+                assert frame['detected']==(i>=3)
+                assert frame['odometry']['processed_scans']==i+1
+            assert frame['odometry']['complete']
+        with client.websocket_connect(detected+'&start=0.7') as ws:
+            frame=ws.receive_json();ws.receive_bytes()
+            assert frame['detected'] and frame['odometry']['complete']
+        preview=client.get(f"/api/detections/{job['id']}/frame",params={'timestamp_ns':int(poses()[0][7])}).json()
+        assert preview['detected'] and preview['tracks']==frame['tracks']

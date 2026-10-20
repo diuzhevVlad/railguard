@@ -31,6 +31,7 @@ from .detection import INITIAL_SPEED_MPS, build_merged_rail_map, RailPrediction
 from .scan_detection import ScanDetector, display_points, rejected_payload, tracking_payload
 from .learned_detection import LearnedDetectionManager, prediction_payload
 from .model_selection import model_range_for_topic
+from .gt_odometry import detection_initial_speed, gt_odometry_preset
 from .sampling_backend import RayCastingBackend
 
 
@@ -279,7 +280,7 @@ def create_app(
     manager = JobManager(backend or RayCastingBackend(), output_root)
     detection_manager = DetectionManager(output_root, detection_map_builder)
     map_manager = WorldMapManager(output_root, detection_manager)
-    learned_manager = LearnedDetectionManager(scan_detector_factory)
+    learned_manager = LearnedDetectionManager(scan_detector_factory, cache_root=output_root / ".tracking_poses")
     models_root = model_path.parent.parent.parent
 
     @asynccontextmanager
@@ -381,6 +382,8 @@ def create_app(
             path = resolve_bag(bag_id, data_root, output_root)
             with AnyReader([path], default_typestore=TYPESTORE) as reader:
                 return {"bag_id": bag_id, "duration_seconds": reader.duration / 1e9, "initial_speed_m_s": source_initial_speed(path),
+                        "detection_initial_speed_m_s": detection_initial_speed(path, source_initial_speed(path)),
+                        "detection_speed_fixed": gt_odometry_preset(path) is not None,
                         "topics": [{"name": c.topic, "type": c.msgtype, "messages": c.msgcount,
                                     "model_range_m": model_range_for_topic(c.topic),
                                     "model_id": f"{model_range_for_topic(c.topic)}m_weights"}
@@ -453,7 +456,8 @@ def create_app(
                            for c in reader.connections):
                     raise ValueError("Select a PointCloud2 topic")
             speed = request.initial_speed_m_s if request.initial_speed_m_s is not None else source_initial_speed(bag)
-            return asdict(learned_manager.start(request.bag_id, bag, request.topic, request.train_width_m, request.train_height_m, request.max_forward_m, speed))
+            job = learned_manager.start(request.bag_id, bag, request.topic, request.train_width_m, request.train_height_m, request.max_forward_m, speed)
+            return {**asdict(job), "odometry": learned_manager.odometry_status(job)}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -462,7 +466,7 @@ def create_app(
         job = learned_manager.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Detection job not found")
-        return asdict(job)
+        return {**asdict(job), "odometry": learned_manager.odometry_status(job)}
 
     @app.get("/api/detections/{job_id}/frame")
     def get_detection_frame(job_id: str, timestamp_ns: int) -> dict:
@@ -488,7 +492,8 @@ def create_app(
                 except Exception as exc:
                     raise HTTPException(400, f"RailGuard inference failed: {exc}") from exc
         prediction, detection = result
-        return {"timestamp_ns": str(timestamp_ns), "candidate_points": detection.point_count,
+        return {"odometry": learned_manager.odometry_status(job),
+                "timestamp_ns": str(timestamp_ns), "candidate_points": detection.point_count,
                 "detected": detection.detected, "distance_m": detection.distance_m,
                 **prediction_payload(prediction),
                 "detected_xyz": display_points(detection.points).tolist(), **rejected_payload(detection),
@@ -517,6 +522,8 @@ def create_app(
             path = resolve_bag(bag_id, data_root, output_root)
             if detection_id:
                 detector = open_detection(detection_id)
+                if hasattr(detector, 'validate_start'):
+                    detector.validate_start(start_s)
         except ValueError as exc:
             await ws.send_json({"type": "error", "message": str(exc)})
             await ws.close()
@@ -542,7 +549,11 @@ def create_app(
                         steps += 1
                     elif action == "show_detection":
                         try:
-                            detector = open_detection(str(command.get("detection_id", "")))
+                            proposed = open_detection(str(command.get("detection_id", "")))
+                            position = (last_frame[1] - reader.start_time)/1e9 if last_frame else start_s
+                            if hasattr(proposed, 'validate_start'):
+                                proposed.validate_start(position)
+                            detector = proposed
                             refresh_overlay = True
                         except ValueError as exc:
                             await ws.send_json({"type": "overlay_error", "message": str(exc)})
@@ -553,6 +564,7 @@ def create_app(
             except (WebSocketDisconnect, RuntimeError):
                 changed.set()
 
+        last_frame = None
         receiver = asyncio.create_task(controls())
         try:
             with AnyReader([path], default_typestore=TYPESTORE) as reader:
@@ -591,6 +603,7 @@ def create_app(
                         if len(detected_points):
                             xyz = np.concatenate((xyz, detected_points))
                     await ws.send_json({"type": "frame", "frame": frame,
+                                        "odometry": selected_detector.status() if detector is not None and hasattr(selected_detector, "status") else None,
                                         "timestamp_ns": str(bag_ns),
                                         "time_seconds": (bag_ns - reader.start_time) / 1e9,
                                         "points": len(xyz), "frame_id": msg.header.frame_id,

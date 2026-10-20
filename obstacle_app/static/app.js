@@ -43,8 +43,23 @@ let models=[],obstacles=[],obstacleSequence=0;
 let socket=null, pendingFrame=null, ended=true, finished=false, paused=false, bagDuration=0, seekMax=0, scrubbing=false, seekTimer=null;
 let bagReady=false,bagLoadVersion=0;
 let activeDetectionId=null,detectionVisible=false,lastFrame=null,lastBasePoints=null;
+let detectionOdometry=null;
+function updateSeekPolicy(odometry){
+  if(odometry!==undefined)detectionOdometry=odometry;
+  const locked=detectionVisible&&!detectionOdometry?.complete;
+  ui.seek.title=locked?'Detection: rewind only until all odometry is computed':'Seek through bag';
+  const hint=$('seek-policy');
+  hint.textContent=!detectionVisible?'':locked
+    ?`Rewind only · odometry ${detectionOdometry?.processed_scans??0}/${detectionOdometry?.total_scans??0} scans. Play onward to compute more; forward seeking unlocks when complete.`
+    :'Odometry complete · backward and forward seeking available';
+  hint.hidden=!detectionVisible;
+}
+function seekAllowed(target){
+  return !detectionVisible||Boolean(detectionOdometry?.complete)||target<=(lastFrame?.time_seconds??0)+1e-9;
+}
 function showDetectionButton(){
   renderObstacleIndicator(lastFrame);
+  updateSeekPolicy();
   $('detect').textContent=detectionVisible?'Detect obstacles: On':'Detect obstacles: Off';
   $('detect').setAttribute('aria-pressed',String(detectionVisible));
   $('detect').classList.toggle('primary',detectionVisible);
@@ -116,7 +131,10 @@ async function loadBag(){
   try{
     const info=await api('/api/info?bag_id='+encodeURIComponent(bagId));
     if(loadVersion!==bagLoadVersion)return;
-    detectionParameters.initial_speed_m_s=info.initial_speed_m_s??0;$('detection-speed').value=detectionParameters.initial_speed_m_s;
+    detectionParameters.initial_speed_m_s=info.detection_initial_speed_m_s??info.initial_speed_m_s??0;$('detection-speed').value=detectionParameters.initial_speed_m_s;
+    $('detection-speed').readOnly=Boolean(info.detection_speed_fixed);
+    $('detection-speed').title=info.detection_speed_fixed?'Fixed GT-generation odometry preset for this recording':'Initial KISS-ICP speed for this recording';
+    $('detection-speed-note').textContent=info.detection_speed_fixed?'Fixed from the GT-generation preset.':'No GT preset: set the initial speed for this recording.';
     simulationParameters.initial_speed_m_s=info.initial_speed_m_s??0;$('initial-speed').value=simulationParameters.initial_speed_m_s;
     $('simulation-parameter-status').textContent=`Active initial speed · ${simulationParameters.initial_speed_m_s} m/s`;
     topicModels=Object.fromEntries(info.topics.map(topic=>[topic.name,topic]));
@@ -180,12 +198,13 @@ function renderFrame(points,frame){
   ui.time.textContent=frame.time_seconds.toFixed(2)+' s';
   if(!scrubbing)showSeek(frame.time_seconds);
 }
-function play(startPaused=false){
+function play(startPaused=false,startSeconds=null){
   if(!bagReady)return;
   if(socket&&!ended){sendCommand('resume');paused=false;return;}
   if(!ui.bag.value||!ui.topic.value)return;
   if(finished){showSeek(0);finished=false;}
-  const qs=new URLSearchParams({bag_id:ui.bag.value,topic:ui.topic.value,start:ui.seek.value,paused:startPaused?'1':'0'});
+  const start=startSeconds??(detectionVisible&&!detectionOdometry?.complete?Math.min(Number(ui.seek.value),lastFrame?.time_seconds??0):Number(ui.seek.value));
+  const qs=new URLSearchParams({bag_id:ui.bag.value,topic:ui.topic.value,start:String(start),paused:startPaused?'1':'0'});
   if(activeDetectionId&&detectionVisible)qs.set('detection_id',activeDetectionId);
   socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws/playback?${qs}`);
   const thisSocket=socket;
@@ -205,6 +224,7 @@ function play(startPaused=false){
       lastBasePoints=points.slice(0,points.length-(frame.detected_points||0)*3);
       if(!detectionVisible&&frame.detected_points){points=lastBasePoints;frame={...frame,detected_points:0,rail_center:null,detected:false};}
       lastFrame=frame;
+      if(detectionVisible&&frame.odometry)updateSeekPolicy(frame.odometry);
       renderFrame(points,frame);
       pendingFrame=null;
     }
@@ -219,10 +239,15 @@ function commitSeek(){
   const target=Math.max(0,Math.min(seekMax,Number(ui.seek.value)||0));
   const wasPlaying=Boolean(socket&&!ended&&!paused);
   clearTimeout(seekTimer);
+  if(!seekAllowed(target)){
+    scrubbing=false;showSeek(lastFrame?.time_seconds??0);
+    notice('Forward seeking is locked while odometry is incomplete. Play onward, or turn detection off for normal viewing.');
+    return;
+  }
   seekTimer=setTimeout(()=>{
     stopPlayback();showSeek(target);scrubbing=false;
     // A paused seek previews one frame. An active seek continues playback.
-    play(!wasPlaying);
+    play(!wasPlaying,target);
   },180);
 }
 async function simulate(){
@@ -270,22 +295,31 @@ async function refreshCurrentOverlay(){
 
 async function setDetectionVisible(visible){
   if(!activeDetectionId)return;
-  detectionVisible=visible;
-  $('detection-legend').hidden=!visible;
-  showDetectionButton();
-  if(socket&&!ended){
-    if(visible)sendMessage({action:'show_detection',detection_id:activeDetectionId});
-    else sendCommand('hide_detection');
-    if(!visible&&lastFrame&&lastBasePoints)renderFrame(lastBasePoints,{...lastFrame,detected_points:0});
-    return;
+  if(visible){
+    const jobId=activeDetectionId,generation=detectionGeneration;
+    const current=await api('/api/detections/'+jobId);
+    if(jobId!==activeDetectionId||generation!==detectionGeneration)return;
+    updateSeekPolicy(current.odometry);
+    const wasPlaying=Boolean(socket&&!ended&&!paused);
+    let target=lastFrame?.time_seconds??Number(ui.seek.value);
+    if(!detectionOdometry?.complete&&target>(detectionOdometry?.processed_until_s??0)){
+      target=detectionOdometry?.processed_until_s??0;
+      notice('Detection resumes from the processed portion. Forward seeking unlocks after odometry is complete.');
+    }
+    stopPlayback();clearTimeout(seekTimer);scrubbing=false;
+    detectionVisible=true;$('detection-legend').hidden=false;
+    lastFrame=null;lastBasePoints=null;showSeek(target);showDetectionButton();
+    play(!wasPlaying,target);
+  }else{
+    detectionVisible=false;$('detection-legend').hidden=true;showDetectionButton();
+    sendCommand('hide_detection');
+    if(lastFrame&&lastBasePoints)renderFrame(lastBasePoints,{...lastFrame,detected_points:0});
   }
-  if(visible)await refreshCurrentOverlay();
-  else if(lastFrame&&lastBasePoints)renderFrame(lastBasePoints,{...lastFrame,detected_points:0});
 }
 
 async function detect(){
   if(!bagReady)return;
-  if(activeDetectionId){await setDetectionVisible(!detectionVisible);return;}
+  if(activeDetectionId){try{await setDetectionVisible(!detectionVisible);}catch(error){notice(error.message,'error');}return;}
   const bagId=ui.bag.value,topic=ui.topic.value,generation=detectionGeneration;
   if(!bagId||!topic)return;
   $('detect').disabled=true;$('detect').textContent='Loading model…';$('detection-job').hidden=false;$('detection-progress-fill').style.width='0%';$('detection-job-text').textContent='Loading RailGuard weights and refiner…';

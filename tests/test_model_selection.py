@@ -33,17 +33,20 @@ def test_jobs_keep_their_model_when_switching_bags(tmp_path, monkeypatch):
         def close(self):
             self.closed = True
     manager = LearnedDetectionManager(runtime_factory=Runtime)
+    from types import SimpleNamespace
+    monkeypatch.setattr(learned_detection, "BagOdometry", lambda bag,topic,*args: SimpleNamespace(bag=bag,topic=topic,close=lambda:None))
     try:
         for key, rows in (("normal",200), ("falcon",400), ("normal_again",200)):
             job = LearnedJob(key, key, "/iv_points" if rows == 400 else "/lidar_points",
                              key, model_range_m=rows, model_id=f"{rows}m_weights")
+            manager.bags[key] = tmp_path/key
             manager._load(job)
             assert job.state == "done", job.message
             provider = manager.detector(job).detector.predictions
             assert provider.runtime.range_m == rows
         assert [r.range_m for r in created] == [200,400]
-        assert manager.detectors["normal"].predictions.runtime is created[0]
-        assert manager.detectors["falcon"].predictions.runtime is created[1]
+        assert manager.detectors["normal"].detector.predictions.runtime is created[0]
+        assert manager.detectors["falcon"].detector.predictions.runtime is created[1]
         too_far = LearnedJob("far", "source/normal", "/lidar_points", "far",
                              max_forward_m=400, model_range_m=200, model_id="200m_weights")
         manager._load(too_far)

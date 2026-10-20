@@ -14,8 +14,9 @@ from .detection import RailPrediction
 from .scan_detection import ScanDetector
 from .world_map import source_fingerprint
 from railpath.tracked_detection import CANDIDATE_CONFIG, detect_candidates
-from .tracked_bag_detection import TrackedBagDetector
+from .tracked_bag_detection import TrackedBagDetector, BagOdometry
 from .model_selection import model_range_for_topic, model_files
+from .gt_odometry import detection_initial_speed
 
 ROOT = Path(__file__).resolve().parent.parent
 DETECTION_FORWARD_LIMIT_M = 150.0
@@ -201,7 +202,7 @@ class LearnedJob:
 
 
 class LearnedDetectionManager:
-    def __init__(self, detector_factory=None, runtime_factory=None):
+    def __init__(self, detector_factory=None, runtime_factory=None, cache_root=None):
         # Import lazily to avoid a cycle when the spawned worker imports this module.
         from .model_worker import ProcessRailRuntime
         self.runtime_factory=runtime_factory or ProcessRailRuntime
@@ -211,6 +212,9 @@ class LearnedDetectionManager:
         self.detectors={}
         self.lock=threading.Lock()
         self.closed=False
+        self.cache_root=Path(cache_root or ROOT/'outputs'/'.tracking_poses')
+        self.bags={}
+        self.odometries={}
 
     def runtime_for(self, range_m):
         with self.lock:
@@ -225,10 +229,14 @@ class LearnedDetectionManager:
         with self.lock:
             self.closed=True
             runtimes=list(self.runtimes.values())
+            odometries=list(self.odometries.values())
+        for odometry in odometries:
+            odometry.close()
         for runtime in runtimes:
             runtime.close()
 
     def start(self,bag_id,bag,topic,train_width_m=2.1,train_height_m=3.0,max_forward_m=150.,initial_speed_m_s=0.):
+        initial_speed_m_s=detection_initial_speed(bag, initial_speed_m_s)
         fingerprint=source_fingerprint(bag)
         with self.lock:
             for job in self.jobs.values():
@@ -237,12 +245,13 @@ class LearnedDetectionManager:
             if len(self.jobs)>=16:
                 expired=next((key for key,value in self.jobs.items() if value.state in ('done','failed')),None)
                 if expired:
-                    self.jobs.pop(expired);self.detectors.pop(expired,None)
+                    self.jobs.pop(expired);self.detectors.pop(expired,None);self.bags.pop(expired,None)
             job=LearnedJob(uuid.uuid4().hex,bag_id,topic,fingerprint,train_width_m,train_height_m,max_forward_m)
             self.jobs[job.id]=job
             job.initial_speed_m_s=initial_speed_m_s
             job.model_range_m=model_range_for_topic(topic)
             job.model_id=f'{job.model_range_m}m_weights'
+            self.bags[job.id]=Path(bag)
         threading.Thread(target=self._load,args=(job,),daemon=True).start()
         return job
 
@@ -264,6 +273,16 @@ class LearnedDetectionManager:
                 detector=self.factory(job.bag_id,job.topic);job.device='test'
             detector.filter_config=replace(detector.filter_config,train_width_m=job.train_width_m,train_height_m=job.train_height_m)
             detector.max_forward_m=job.max_forward_m
+            if self.factory is None:
+                key=(job.fingerprint,job.topic,job.initial_speed_m_s)
+                with self.lock:
+                    if self.closed:
+                        raise RuntimeError('Detection manager has shut down')
+                    if key not in self.odometries:
+                        self.odometries[key]=BagOdometry(self.bags[job.id],job.topic,
+                            job.initial_speed_m_s,self.cache_root)
+                    odometry=self.odometries[key]
+                detector=TrackedBagDetector(detector,odometry)
             with self.lock:
                 self.detectors[job.id]=detector
                 model_label=f' {job.model_range_m} m' if job.model_range_m else ''
@@ -275,15 +294,15 @@ class LearnedDetectionManager:
         with self.lock:
             return self.jobs.get(job_id)
 
-    def detector(self,job):
-        """Open independent tracking for one playback connection or frame preview."""
+    def odometry_status(self,job):
         with self.lock:
-            detector = self.detectors[job.id]
-        # Each websocket owns its stream. A standalone frame request is a fresh
-        # one-scan preview, never a request to replay hidden historical scans.
-        if self.factory is not None:
-            return detector
-        return TrackedBagDetector(detector, job.initial_speed_m_s)
+            detector=self.detectors.get(job.id)
+        return detector.status() if isinstance(detector,TrackedBagDetector) else None
+
+    def detector(self,job):
+        """Shared deterministic results based on this bag's recorded scan history."""
+        with self.lock:
+            return self.detectors[job.id]
 
 
 def prediction_payload(prediction):

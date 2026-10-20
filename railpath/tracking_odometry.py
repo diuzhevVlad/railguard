@@ -6,12 +6,24 @@ ODOMETRY_VERSION = 1
 
 
 class TrackingOdometry:
-    def __init__(self, initial_speed_m_s=0., max_gap_s=2., factory=None):
+    def __init__(self, initial_speed_m_s=0., max_gap_s=2., factory=None, *,
+                 point_stride=8, deskew=False, initial_scan_dt_s=None,
+                 min_distance_m=.5, max_num_threads=0):
         if not np.isfinite(initial_speed_m_s) or initial_speed_m_s < 0:
             raise ValueError("Initial speed must be finite and nonnegative")
         self.initial_speed = float(initial_speed_m_s)
         self.max_gap_ns = max_gap_s * 1e9
         self.factory = factory
+        if (not isinstance(point_stride, int) or point_stride < 1
+                or not np.isfinite(min_distance_m) or min_distance_m < 0
+                or (initial_scan_dt_s is not None and
+                    (not np.isfinite(initial_scan_dt_s) or initial_scan_dt_s <= 0))):
+            raise ValueError("Invalid odometry input settings")
+        self.point_stride = point_stride
+        self.deskew = deskew
+        self.initial_scan_dt_s = initial_scan_dt_s
+        self.min_distance_m = min_distance_m
+        self.max_num_threads = max_num_threads
         self.engine = None
         self.previous = None
         self.count = 0
@@ -21,29 +33,37 @@ class TrackingOdometry:
             from kiss_icp.config import load_config
             from kiss_icp.kiss_icp import KissICP
             config = load_config(None)
-            config.data.deskew = False
+            config.data.deskew = self.deskew
+            config.registration.max_num_threads = self.max_num_threads
             self.engine = KissICP(config)
         else:
             self.engine = self.factory()
         self.count = 0
         self.previous = None
 
-    def update(self, points, stamp_ns):
+    def update(self, points, stamp_ns, point_timestamps=None):
         reset = (self.engine is None or self.previous is None
                  or not 0 < stamp_ns - self.previous <= self.max_gap_ns)
         if reset:
             self.reset()
         xyz = np.asarray(points)
-        xyz = xyz[np.isfinite(xyz).all(1) & (np.einsum('ij,ij->i', xyz, xyz) > .25)]
+        times = np.asarray(point_timestamps, dtype=np.float64) if point_timestamps is not None else np.empty(0)
+        if times.size and times.shape != (len(xyz),):
+            raise ValueError("Point timestamps must match XYZ")
+        valid = np.isfinite(xyz).all(1) & (np.einsum('ij,ij->i', xyz, xyz) > self.min_distance_m**2)
+        if times.size:
+            valid &= np.isfinite(times)
+            times = times[valid][::self.point_stride]
+        xyz = xyz[valid]
         if len(xyz) < 3:
             # An empty scan provides no alignment. Break support on both sides.
             self.engine = None
             self.previous = None
             return np.eye(4), True
         if self.count == 1:
-            dt = (stamp_ns - self.previous) / 1e9
+            dt = self.initial_scan_dt_s if self.initial_scan_dt_s is not None else (stamp_ns - self.previous) / 1e9
             self.engine.last_delta[1, 3] = -self.initial_speed * dt
-        self.engine.register_frame(xyz[::8].astype(np.float64), np.empty(0, np.float64))
+        self.engine.register_frame(xyz[::self.point_stride].astype(np.float64), times)
         pose = self.engine.last_pose.copy()
         if pose.shape != (4, 4) or not np.isfinite(pose).all():
             self.engine = None
