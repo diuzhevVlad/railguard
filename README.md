@@ -71,37 +71,53 @@ docker compose up -d --build web
 
 ## ROS-нода и RViz
 
-Запускаются две ноды из одного launch-файла: `railguard_odometry` (потоковый KISS-ICP, публикует `/railguard/odometry`)
-и `railguard_node` (модель оси, кандидаты препятствий по одному скану, подтверждение по нескольким сканам с помощью
-одометрии — та же процедура подтверждения, что в веб-приложении, и та же таблица начальных скоростей; сама регистрация
-KISS-ICP в ноде идёт в онлайн-режиме: каждая 8-я точка, без deskew — офлайн-настройки приложения не успевают за 10 Гц).
+Нода запускается в одном из двух режимов. Переменные окружения `docker compose` попадают в аргументы launch-файла:
 
-Пресет выбирается по имени каталога записи переменной `RAILGUARD_BAG`; для записи без пресета задайте
-`RAILGUARD_INITIAL_SPEED` (м/с; `0`, если поезд в начале стоит). Без того или другого launch завершается с ошибкой.
+| Переменная | Значение | Режим |
+| --- | --- | --- |
+| `RAILGUARD_ODOMETRY` | `true` (по умолчанию) — с одометрией; `false` — без | оба |
+| `RAILGUARD_BAG` | имя каталога записи → пресет начальной скорости KISS-ICP из таблицы выше | с одометрией |
+| `RAILGUARD_INITIAL_SPEED` | начальная скорость, м/с (для записи без пресета или при старте с середины записи) | с одометрией |
+| `RAILGUARD_INPUT_TOPIC` | топик облака точек (по умолчанию из `railguard/config/railguard.yaml`) | оба |
+
+### Режим 1: с одометрией (по умолчанию)
+
+Из одного launch-файла запускаются `railguard_odometry` (потоковый KISS-ICP, публикует `/railguard/odometry`) и
+`railguard_node` (модель оси, кандидаты по одному скану, подтверждение препятствия по нескольким сканам с помощью
+одометрии — та же процедура подтверждения и та же таблица начальных скоростей, что в веб-приложении). Регистрация
+KISS-ICP в ноде идёт в онлайн-режиме (каждая 8-я точка, без deskew): офлайн-настройки приложения не успевают за 10 Гц.
+
+Обязательно задайте начальную скорость: пресетом (`RAILGUARD_BAG`, для записи, воспроизводимой с начала) или числом
+(`RAILGUARD_INITIAL_SPEED`; `0`, если поезд стоит; при старте с середины записи — фактическая скорость в этой точке).
+Без того или другого launch завершается с ошибкой.
 
 ```sh
 xhost +local:root
-RAILGUARD_BAG=new_data docker compose up -d --build node          # пресет: скорость 0, интервал 0.1013 с
-RAILGUARD_INITIAL_SPEED=10 docker compose up -d node               # запись без пресета
+RAILGUARD_BAG=new_data docker compose up -d --build node          # пресет: скорость 0 м/с
+RAILGUARD_INITIAL_SPEED=10 docker compose up -d node               # запись без пресета или старт с середины
 docker compose logs -f node
 ```
 
-Переменные окружения попадают в аргументы launch-файла (`RAILGUARD_INPUT_TOPIC` — топик облака, по умолчанию из YAML);
-те же параметры можно задать вручную: `ros2 launch railguard railguard.launch.py bag:=new_data input_topic:=/lidar_points`.
+### Режим 2: без одометрии
 
-Альтернативная конфигурация — **без одометрии** (только нода детекции, препятствия по одному скану по «немедленному»
-правилу, без подтверждения по нескольким сканам; пресет и скорость не нужны):
+Только нода детекции: препятствия по одному скану по «немедленному» правилу (группа > 50 уникальных точек), без
+подтверждения по нескольким сканам. Пресет и скорость не нужны.
 
 ```sh
 RAILGUARD_ODOMETRY=false docker compose up -d node
 ```
 
+### RViz и воспроизведение
+
+Те же параметры можно задать вручную: `ros2 launch railguard railguard.launch.py bag:=new_data odometry:=true input_topic:=/lidar_points`.
 В отдельных терминалах откройте RViz и воспроизведите bag:
 
 ```sh
 docker compose exec node bash -ic 'rviz2 -d /opt/railguard/ws/install/railguard/share/railguard/rviz/railguard.rviz'
 docker compose exec node bash -ic 'ros2 bag play /bags/new_data_val'
 ```
+
+Смена режима или записи — перезапуск с другими переменными: `RAILGUARD_BAG=synthetic_platform_cloud_only docker compose up -d node`.
 
 ### Выходные топики ноды
 
