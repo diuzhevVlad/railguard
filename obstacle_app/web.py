@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field as dataclass_field
 import hashlib
 import json
@@ -29,6 +30,7 @@ from .world_map import WorldMapManager, world_mesh, preview_materials, source_fi
 from .detection import INITIAL_SPEED_MPS, build_merged_rail_map, RailPrediction
 from .scan_detection import ScanDetector, display_points, rejected_payload, tracking_payload
 from .learned_detection import LearnedDetectionManager, prediction_payload
+from .model_selection import model_range_for_topic
 from .sampling_backend import RayCastingBackend
 
 
@@ -277,10 +279,15 @@ def create_app(
     manager = JobManager(backend or RayCastingBackend(), output_root)
     detection_manager = DetectionManager(output_root, detection_map_builder)
     map_manager = WorldMapManager(output_root, detection_manager)
-    learned_manager = LearnedDetectionManager(scan_detector_factory, output_root / ".tracking_poses")
+    learned_manager = LearnedDetectionManager(scan_detector_factory)
     models_root = model_path.parent.parent.parent
 
-    app = FastAPI(title="Obstacle Bag Studio")
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        await asyncio.to_thread(learned_manager.close)
+
+    app = FastAPI(title="Obstacle Bag Studio", lifespan=lifespan)
 
     @app.get("/")
     def index() -> FileResponse:
@@ -374,7 +381,9 @@ def create_app(
             path = resolve_bag(bag_id, data_root, output_root)
             with AnyReader([path], default_typestore=TYPESTORE) as reader:
                 return {"bag_id": bag_id, "duration_seconds": reader.duration / 1e9, "initial_speed_m_s": source_initial_speed(path),
-                        "topics": [{"name": c.topic, "type": c.msgtype, "messages": c.msgcount}
+                        "topics": [{"name": c.topic, "type": c.msgtype, "messages": c.msgcount,
+                                    "model_range_m": model_range_for_topic(c.topic),
+                                    "model_id": f"{model_range_for_topic(c.topic)}m_weights"}
                                    for c in reader.connections]}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

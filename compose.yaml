@@ -14,14 +14,16 @@ services:
               capabilities: [gpu]
     environment:
       OBSTACLE_RAIL_DEVICE: cuda
-      OBSTACLE_WEIGHTS_DIR: /weights
+      OBSTACLE_WEIGHTS_200_DIR: /models/200m_weights
+      OBSTACLE_WEIGHTS_400_DIR: /models/400m_weights
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     ports:
       - "127.0.0.1:${WEB_PORT:-8000}:8000"
     volumes:
       - ./data:/data:ro
       - ./outputs:/output
-      - ./weights:/weights:ro
+      - ./200m_weights:/models/200m_weights:ro
+      - ./400m_weights:/models/400m_weights:ro
     restart: unless-stopped
   node:
     build:

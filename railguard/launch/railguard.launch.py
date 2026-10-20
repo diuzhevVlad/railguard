@@ -12,5 +12,6 @@ def generate_launch_description():
     default = os.path.join(get_package_share_directory('railguard'), 'config', 'railguard.yaml')
     return LaunchDescription([
         DeclareLaunchArgument('config', default_value=default),
+        Node(package='railguard', executable='railguard_odometry', parameters=[LaunchConfiguration('config')], output='screen'),
         Node(package='railguard', executable='railguard_node', parameters=[LaunchConfiguration('config')], output='screen'),
     ])

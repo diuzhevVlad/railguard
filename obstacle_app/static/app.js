@@ -2,6 +2,16 @@ const $ = id => document.getElementById(id);
 const ui = {bag:$('bag'),topic:$('topic'),seek:$('seek'),seekPosition:$('seek-position'),seekEnd:$('seek-end'),notice:$('notice'),status:$('frame-status'),time:$('time-display')};
 let detectionParameters={initial_speed_m_s:0,train_width_m:2.1,train_height_m:3,max_forward_m:150};
 let simulationParameters={initial_speed_m_s:0};
+let topicModels={};
+function updateAutomaticModel(){
+  const model=topicModels[ui.topic.value];if(!model)return;
+  $('detection-model').textContent=`Automatic model · ${model.model_id}`;
+  $('detection-distance').max=String(model.model_range_m);
+  detectionParameters.max_forward_m=Math.min(detectionParameters.max_forward_m,model.model_range_m);
+  $('detection-distance').value=String(detectionParameters.max_forward_m);
+  $('detection-distance-value').textContent=detectionParameters.max_forward_m+' m';
+  $('detection-parameter-status').textContent=`Active envelope · ${detectionParameters.train_width_m} × ${detectionParameters.train_height_m} m · detection to ${detectionParameters.max_forward_m} m`;
+}
 let detectionGeneration=0,resumeAfterDetection=false;
 async function applyDetectionParameters(){
   for(const input of $('detection-parameters').querySelectorAll('input'))if(!input.reportValidity())return;
@@ -109,10 +119,12 @@ async function loadBag(){
     detectionParameters.initial_speed_m_s=info.initial_speed_m_s??0;$('detection-speed').value=detectionParameters.initial_speed_m_s;
     simulationParameters.initial_speed_m_s=info.initial_speed_m_s??0;$('initial-speed').value=simulationParameters.initial_speed_m_s;
     $('simulation-parameter-status').textContent=`Active initial speed · ${simulationParameters.initial_speed_m_s} m/s`;
+    topicModels=Object.fromEntries(info.topics.map(topic=>[topic.name,topic]));
     ui.topic.replaceChildren();
     for(const topic of info.topics.filter(t=>t.type==='sensor_msgs/msg/PointCloud2')){
       const opt=document.createElement('option');opt.value=topic.name;opt.textContent=topic.name;ui.topic.append(opt);
     }
+    updateAutomaticModel();
     $('bag-info').textContent=`${info.duration_seconds.toFixed(1)} s · ${info.topics.length} topic(s)`;
     bagDuration=info.duration_seconds;seekMax=Math.max(0,bagDuration-.001);ui.seek.max=String(seekMax);ui.seekEnd.textContent=formatTime(bagDuration);showSeek(0);
     $('add-obstacle').disabled=!models.length||bagDuration<=4;
@@ -309,7 +321,7 @@ const mapEditor=new MapEditor(renderer);
 $('show-rejected').addEventListener('change',()=>renderer.requestDraw());
 ui.bag.addEventListener('change',loadBag);
 $('add-obstacle').addEventListener('click',addObstacle);
-ui.topic.addEventListener('change',()=>{detectionGeneration++;resumeAfterDetection=false;mapEditor.reset();stopPlayback();activeDetectionId=null;detectionVisible=false;lastFrame=null;lastBasePoints=null;$('detection-legend').hidden=true;$('detection-job').hidden=true;showDetectionButton();renderer.setCandidates(null);renderer.setPrediction(null);renderer.setPoints(new Float32Array(0));});
+ui.topic.addEventListener('change',()=>{updateAutomaticModel();detectionGeneration++;resumeAfterDetection=false;mapEditor.reset();stopPlayback();activeDetectionId=null;detectionVisible=false;lastFrame=null;lastBasePoints=null;$('detection-legend').hidden=true;$('detection-job').hidden=true;showDetectionButton();renderer.setCandidates(null);renderer.setPrediction(null);renderer.setPoints(new Float32Array(0));});
 ui.seek.addEventListener('input',()=>{scrubbing=true;showSeek(ui.seek.value,false);});
 ui.seek.addEventListener('change',commitSeek);
 $('play').addEventListener('click',()=>play());$('pause').addEventListener('click',pause);$('step').addEventListener('click',step);$('simulate').addEventListener('click',simulate);$('detect').addEventListener('click',detect);

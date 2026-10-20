@@ -1,6 +1,17 @@
+/**:
+  ros__parameters:
+    # Shared by detection and KISS-ICP. Change this once for both nodes.
+    input_topic: /lidar_points                        # doubleT_obstacle: /sensing/lidar/hesai128/pointcloud
+    odometry_topic: /railguard/odometry
+    tracking_max_gap_s: 2.0
+
+railguard_odometry:
+  ros__parameters:
+    initial_speed_m_s: 0.0
+    odometry_frame: railguard_odom
+
 railguard_node:
   ros__parameters:
-    input_topic: /lidar_points                        # doubleT_obstacle: /sensing/lidar/hesai128/pointcloud
     weights: /opt/railguard/weights/path/best.pt
     refiner: /opt/railguard/weights/refine            # "" = no refiner (centerline only as far as the rails are seen)
     drop_intensity: true                              # the model was trained without intensity
@@ -15,9 +26,9 @@ railguard_node:
     min_cluster_points: 4
     count_unique_xyz: true                          # duplicate XYZ records do not add cluster support
     # Odometry aligns candidate groups; neural inference still uses one scan.
-    initial_speed_m_s: 0.0
+    odometry_wait_s: 0.5                            # missing poses break temporal support
+    odometry_queue_size: 10                         # bounded pending scan/pose joins
     tracking_match_distance_m: 1.0
     tracking_window_scans: 5
     tracking_minimum_hits: 4
     tracking_immediate_unique_points_gt: 50          # strictly >50, per group
-    tracking_max_gap_s: 2.0

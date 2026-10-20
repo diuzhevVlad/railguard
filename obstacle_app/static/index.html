@@ -18,6 +18,7 @@
       </section>
       <section id="detection-parameters">
         <div class="section-title"><h2>Detection</h2></div>
+        <p class="hint" id="detection-model">Model selected automatically from the LiDAR topic</p>
         <label>Detection initial speed · m/s<input id="detection-speed" type="number" min="0" step="any" value="0" required></label>
         <label>Train width · m<input id="train-width" type="number" min="0.1" max="20" step="any" value="2.1" required></label>
         <label>Train height above track · m<input id="train-height" type="number" min="0.1" max="20" step="any" value="3" required></label>
@@ -25,7 +26,7 @@
         <input id="detection-distance" type="range" min="5" max="400" step="5" value="150">
         <button id="apply-detection-parameters">Apply detection settings</button>
         <p class="hint">Train size updates when you finish editing a field (Tab or click outside). Distance updates when you release the slider. These settings affect detection only.</p>
-        <p class="hint">Candidates need 4 unique XYZ points. Confirmation uses 1 m odometry matching in 4 of 5 scans; groups with more than 50 unique points confirm immediately. Initial speed is used only for detection odometry.</p>
+        <p class="hint">Candidates need 4 unique XYZ points. Confirmation uses 1 m odometry matching in 4 of 5 scans; groups with more than 50 unique points confirm immediately. Initial speed is used only for detection odometry. Odometry runs during playback; seeking or enabling detection starts fresh confirmation history.</p>
         <p class="hint" id="detection-parameter-status">Active envelope · 2.1 × 3 m · detection to 150 m</p>
       </section>
       <section id="simulation-parameters">
@@ -84,6 +85,6 @@
   <script src="/mesh-controls.js?v=1"></script>
 <script src="/cloud-renderer.js?v=tracking-1"></script>
 <script src="/map-editor.js?v=stable-viewer-2"></script>
-  <script src="/app.js?v=tracking-1"></script>
+  <script src="/app.js?v=auto-model-1"></script>
 </body>
 </html>

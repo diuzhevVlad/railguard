@@ -1,8 +1,11 @@
 """RailGuard node: scan in; track, rails, and filtered obstacle detections out."""
 
+import numpy as np
+from scipy.spatial.transform import Rotation
+
 import rclpy
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Path
+from nav_msgs.msg import Path, Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
@@ -14,7 +17,8 @@ from railpath import RailPath
 from railpath.bag_io import unpack
 from railpath.obstacle_filter import ObstacleFilterConfig, detect_obstacles
 from railpath.tracked_detection import CANDIDATE_CONFIG, detect_candidates, StreamingConfirmation
-from railpath.tracking_odometry import TrackingOdometry
+from railpath.pose_sync import PoseSynchronizer
+from railpath.tracked_detection import confirm_detection
 from railpath.obstacle_tracking import TRACKING_SETTINGS
 
 
@@ -39,9 +43,14 @@ class RailGuardNode(Node):
         for name in ('match_distance_m', 'minimum_hits', 'window_scans', 'immediate_unique_points_gt', 'max_gap_s'):
             settings[name] = self.declare_parameter('tracking_' + name, settings[name]).value
         self.confirmation = StreamingConfirmation(settings)
-        self.odometry = TrackingOdometry(
-            self.declare_parameter('initial_speed_m_s', 0.).value, settings['max_gap_s'])
-        self.sensor_frame = None
+        self.odom_epoch = None
+        self.pose_sync = PoseSynchronizer(self.on_aligned, self.reset_tracking,
+            max_pending=self.declare_parameter('odometry_queue_size', 10).value,
+            timeout_s=self.declare_parameter('odometry_wait_s', .5).value)
+        self.create_timer(.02, self.pose_sync.flush)
+        odometry_topic = self.declare_parameter('odometry_topic', '/railguard/odometry').value
+        self.create_subscription(Odometry, odometry_topic, self.on_odometry,
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.pub_candidates = self.create_publisher(PointCloud2, '/railguard/obstacle_candidates', 1)
         self.pub_obstacles = self.create_publisher(PointCloud2, '/railguard/obstacles', 1)
         self.pub_detected = self.create_publisher(Bool, '/railguard/obstacle_detected', 1)
@@ -54,21 +63,13 @@ class RailGuardNode(Node):
     def on_cloud(self, msg):
         xyz, intensity, ring, valid = unpack(msg)
         stamp = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
-        if msg.header.frame_id != self.sensor_frame:
-            self.sensor_frame = msg.header.frame_id
-            self.odometry.reset()
-            self.confirmation.reset()
-        pose, reset = self.odometry.update(xyz[valid], stamp)
-        if reset:
-            self.confirmation.reset()
         self.model.sparse = None
         out = self.model.predict(xyz[valid], intensity[valid], ring[valid] if ring is not None else None)
         candidate = detect_obstacles(xyz[valid], out['centerline'], out['rails'],
                                      self.obstacle_config, self.max_forward_m,
                                      candidate_detector=detect_candidates)
-        detection = self.confirmation.update(stamp, candidate, pose)
         self.pub_candidates.publish(point_cloud2.create_cloud_xyz32(msg.header, candidate.points))
-        centerline=detection.prediction.center if detection.prediction is not None else out['centerline']
+        centerline=candidate.prediction.center if candidate.prediction is not None else out['centerline']
         path = Path(header=msg.header)
         for x, y, z in centerline:
             if x == x:                                             # skip NaN (beyond the supported range without the refiner)
@@ -77,11 +78,51 @@ class RailGuardNode(Node):
                 path.poses.append(pose)
         self.pub_path.publish(path)
         self.pub_rails.publish(point_cloud2.create_cloud_xyz32(msg.header, out['rails']))
-        self.pub_obstacles.publish(point_cloud2.create_cloud_xyz32(msg.header, detection.points))
+        self.pose_sync.add_cloud(stamp, msg.header.frame_id, (msg.header, candidate))
+
+    def reset_tracking(self):
+        self.confirmation.reset()
+        self.odom_epoch = None
+
+    def on_odometry(self, msg):
+        q = msg.pose.pose.orientation
+        p = msg.pose.pose.position
+        try:
+            quaternion = np.array([q.x, q.y, q.z, q.w])
+            if not np.isfinite(quaternion).all() or not np.isfinite([p.x, p.y, p.z]).all():
+                raise ValueError('Nonfinite odometry')
+            matrix = np.eye(4)
+            matrix[:3, :3] = Rotation.from_quat(quaternion).as_matrix()
+            matrix[:3, 3] = [p.x, p.y, p.z]
+        except ValueError as exc:
+            self.get_logger().warning(f'Ignoring invalid odometry: {exc}')
+            return
+        stamp = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        self.pose_sync.add_pose(stamp, msg.child_frame_id, (msg.header.frame_id, matrix))
+
+    def on_aligned(self, stamp, value, odometry):
+        header, candidate = value
+        if odometry is None:
+            # Do not guess a transform. Large current groups still satisfy the
+            # immediate rule; small groups cannot acquire temporal confirmation.
+            self.reset_tracking()
+            detection = confirm_detection(candidate, [(0, stamp, candidate.points, np.eye(4))],
+                                          self.confirmation.settings)
+            self.get_logger().warning('No matching odometry: temporal confirmation reset', throttle_duration_sec=5.)
+        else:
+            epoch, matrix = odometry
+            if epoch != self.odom_epoch:
+                self.confirmation.reset()
+                self.odom_epoch = epoch
+            detection = self.confirmation.update(stamp, candidate, matrix)
+        self.publish_detection(header, detection)
+
+    def publish_detection(self, header, detection):
+        self.pub_obstacles.publish(point_cloud2.create_cloud_xyz32(header, detection.points))
         self.pub_detected.publish(Bool(data=detection.detected))
         self.pub_distance.publish(Float32(data=detection.distance_m if detection.detected else float('nan')))
         nearest = Marker()
-        nearest.header = msg.header
+        nearest.header = header
         nearest.ns = 'nearest_obstacle'
         nearest.id = 0
         if detection.nearest_point is None:
@@ -98,7 +139,14 @@ class RailGuardNode(Node):
 
 def main():
     rclpy.init()
-    rclpy.spin(RailGuardNode())
+    node = RailGuardNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':
