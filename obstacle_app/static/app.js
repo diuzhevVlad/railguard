@@ -192,7 +192,7 @@ function renderFrame(points,frame){
   if(mapEditor.active)return;
   renderer.setPoints(points,frame.obstacle_points||0,frame.detected_points||0);
   renderer.setPrediction(detectionVisible?frame.rail_center:null,detectionVisible?frame.rail_points:null,frame.rail_prediction?.lookahead_limit_m,frame.rail_prediction?.checked_min_forward_m||0,frame.rail_prediction?.train_width_m??2.1,frame.rail_prediction?.train_height_m??3,frame.rail_prediction);
-  renderer.setCandidates(detectionVisible?frame.unconfirmed_xyz:null);
+  renderer.setCandidates(null);
   renderer.setRejected(detectionVisible?frame.rejected_xyz:null);
   renderStatus(frame,points.length/3);
   ui.time.textContent=frame.time_seconds.toFixed(2)+' s';

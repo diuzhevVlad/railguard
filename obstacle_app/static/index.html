@@ -77,7 +77,7 @@
       </div>
       <div id="detection-job" class="job viewer-job" hidden><div class="progress"><div id="detection-progress-fill"></div></div><p id="detection-job-text">Preparing…</p></div>
       <div class="canvas-wrap"><canvas id="cloud"></canvas><div id="obstacle-indicator" class="obstacle-indicator" data-state="off" role="status" aria-live="polite" aria-atomic="true"><strong id="obstacle-indicator-title">Detection off</strong><span id="obstacle-indicator-distance"></span><small id="obstacle-indicator-detail">Turn on Detect obstacles to check the current scan.</small></div><div class="canvas-hint">Left drag: orbit · Right drag: pan · Scroll: zoom · Click view, then WASD: move · Shift: faster</div></div>
-      <div class="detection-legend" id="detection-legend" hidden><span class="legend-rails">Segmented rail points</span><span class="legend-train">Train envelope</span><span style="color:#ffaa59">Unconfirmed candidates</span><span class="legend-obstacle">Confirmed obstacles</span><span class="legend-centerline">Predicted centerline</span><label style="color:#c18aff"><input id="show-rejected" type="checkbox"> Show rejected points</label></div>
+      <div class="detection-legend" id="detection-legend" hidden><span class="legend-rails">Segmented rail points</span><span class="legend-train">Train envelope</span><span class="legend-obstacle">Confirmed obstacles</span><span class="legend-centerline">Predicted centerline</span><label style="color:#c18aff"><input id="show-rejected" type="checkbox"> Show rejected points</label></div>
       <p class="hint" id="seek-policy" hidden></p>
       <div class="timeline"><input id="seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Seek through bag"><div class="timeline-labels"><span id="seek-position">0:00.0</span><span id="seek-end">0:00.0</span></div></div>
       <div class="transport"><button id="play">▶ Play</button><button id="pause">Ⅱ Pause</button><button id="step">⇥ Step</button><span id="time-display">0.0 s</span></div>
@@ -87,6 +87,6 @@
   <script src="/mesh-controls.js?v=1"></script>
 <script src="/cloud-renderer.js?v=tracking-1"></script>
 <script src="/map-editor.js?v=stable-viewer-2"></script>
-  <script src="/app.js?v=required-speed-1"></script>
+  <script src="/app.js?v=confirmed-only-1"></script>
 </body>
 </html>
