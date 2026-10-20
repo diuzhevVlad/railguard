@@ -7,6 +7,8 @@
 
 railguard_odometry:
   ros__parameters:
+    # Registration: online defaults of the node (point_stride 8, deskew false, min_distance_m 0.5, all cores). The web app
+    # registers offline with stride 1 and deskew; those were slower than real time here and deskew shortened the track.
     initial_speed_m_s: 0.0
     odometry_frame: railguard_odom
 

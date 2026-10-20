@@ -7,6 +7,10 @@
       <transport_id>udp</transport_id>
       <type>UDPv4</type>
       <maxMessageSize>65500</maxMessageSize>
+      <!-- a 7 MB scan is ~110 UDP datagrams; with the kernel defaults (208 kB) most of them are dropped. The host must allow
+           these sizes: sysctl net.core.rmem_max/rmem_default/wmem_max/wmem_default = 268435456 (see README). -->
+      <sendBufferSize>67108864</sendBufferSize>
+      <receiveBufferSize>67108864</receiveBufferSize>
     </transport_descriptor>
   </transport_descriptors>
   <participant profile_name="udp_only" is_default_profile="true">

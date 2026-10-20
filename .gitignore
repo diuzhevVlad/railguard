@@ -23,8 +23,13 @@ data/
 
 # model weights are distributed separately (see README)
 weights/
+200m_weights/
+400m_weights/
+weights_old*/
 
 # Web exports and local caches
 outputs/
 .venv/
 *.log
+image-archives
+data

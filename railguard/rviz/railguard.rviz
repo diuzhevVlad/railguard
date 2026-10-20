@@ -35,18 +35,6 @@ Visualization Manager:
       Color Transformer: FlatColor
       Color: 80; 150; 255
     - Class: rviz_default_plugins/PointCloud2
-      Name: Obstacle candidates
-      Enabled: true
-      Topic:
-        Value: /railguard/obstacle_candidates
-        Reliability Policy: Reliable
-        Depth: 1
-      Style: Points
-      Size (Pixels): 3
-      Color Transformer: FlatColor
-      Color: 255; 170; 89
-      Decay Time: 0
-    - Class: rviz_default_plugins/PointCloud2
       Name: Obstacles
       Enabled: true
       Topic:

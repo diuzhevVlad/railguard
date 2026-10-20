@@ -10,7 +10,31 @@
 - `data/`, `weights/`, `outputs/` — записи, веса модели и результаты.
 - `compose.yaml` — запуск обоих интерфейсов.
 
-Команды выполняйте из корня репозитория. Нужны Docker, NVIDIA GPU и NVIDIA Container Toolkit. Положите веса в `weights/path/best.pt`, `weights/refine/last.pt`, `weights/refine/calib.json`, а распакованные ROS bag с `metadata.yaml` — в `data/<имя>/`.
+Команды выполняйте из корня репозитория. Нужны Docker, NVIDIA GPU и NVIDIA Container Toolkit.
+
+### Веса
+
+Веса распространяются отдельно (каталоги в `.gitignore`). Два комплекта: 200 м (модель оси + рефайнер 200 м) и 400 м
+(та же модель оси + рефайнер 400 м). Раскладка:
+
+| Каталог | Кто читает | Содержимое |
+| --- | --- | --- |
+| `weights/` | ROS-нода (копируется в образ и монтируется поверх) | `path/best.pt`, `refine/last.pt`, `refine/calib.json` — комплект, с которым запускается нода; `RAILPATH_ROWS` в `compose.yaml` должен совпадать с рефайнером (200 или 400) |
+| `200m_weights/` | веб-приложение, профиль Pandar128 (`/lidar_points`) | та же структура |
+| `400m_weights/` | веб-приложение, профиль Falcon (`/iv_points`) | та же структура |
+
+Распакованные ROS bag с `metadata.yaml` кладите в `data/<имя>/`.
+
+### Настройка хоста (один раз)
+
+Нода и bag обмениваются сканами по UDP (~7 МБ на скан, 10 Гц). Со стандартными буферами ядра (208 КБ) большая часть
+сканов теряется (`RcvbufErrors` в `/proc/net/snmp` растут), поэтому поднимите лимиты:
+
+```sh
+sudo sysctl -w net.core.rmem_max=268435456 net.core.rmem_default=268435456 net.core.wmem_max=268435456 net.core.wmem_default=268435456
+```
+
+(чтобы сохранить после перезагрузки — те же строки в `/etc/sysctl.d/99-railguard.conf`).
 
 ## Веб-приложение
 
@@ -43,23 +67,40 @@ docker compose up -d --build web
 
 Для неизвестной записи поле **Detection initial speed · m/s** остаётся пустым: перед включением детекции нужно явно указать скорость. Если поезд в начале записи стоит, введите `0`. Переименование исходного каталога отключает автоматический выбор его пресета. Для записей без пресета интервал инициализации равен 0.1 с.
 
-Эти пресеты относятся к детекции в веб-приложении; параметры симуляции и начальная скорость ROS-ноды настраиваются отдельно.
+Эти же пресеты использует ROS-нода (`RAILGUARD_BAG`, см. ниже); параметры симуляции настраиваются отдельно.
 
 ## ROS-нода и RViz
 
-Запустите ноду:
+Запускаются две ноды из одного launch-файла: `railguard_odometry` (потоковый KISS-ICP, публикует `/railguard/odometry`)
+и `railguard_node` (модель оси, кандидаты препятствий по одному скану, подтверждение по нескольким сканам с помощью
+одометрии — та же процедура подтверждения, что в веб-приложении, и та же таблица начальных скоростей; сама регистрация
+KISS-ICP в ноде идёт в онлайн-режиме: каждая 8-я точка, без deskew — офлайн-настройки приложения не успевают за 10 Гц).
+
+Пресет выбирается по имени каталога записи переменной `RAILGUARD_BAG`; для записи без пресета задайте
+`RAILGUARD_INITIAL_SPEED` (м/с; `0`, если поезд в начале стоит). Без того или другого launch завершается с ошибкой.
 
 ```sh
 xhost +local:root
-docker compose up -d --build node
+RAILGUARD_BAG=new_data docker compose up -d --build node          # пресет: скорость 0, интервал 0.1013 с
+RAILGUARD_INITIAL_SPEED=10 docker compose up -d node               # запись без пресета
 docker compose logs -f node
+```
+
+Переменные окружения попадают в аргументы launch-файла (`RAILGUARD_INPUT_TOPIC` — топик облака, по умолчанию из YAML);
+те же параметры можно задать вручную: `ros2 launch railguard railguard.launch.py bag:=new_data input_topic:=/lidar_points`.
+
+Альтернативная конфигурация — **без одометрии** (только нода детекции, препятствия по одному скану по «немедленному»
+правилу, без подтверждения по нескольким сканам; пресет и скорость не нужны):
+
+```sh
+RAILGUARD_ODOMETRY=false docker compose up -d node
 ```
 
 В отдельных терминалах откройте RViz и воспроизведите bag:
 
 ```sh
 docker compose exec node bash -ic 'rviz2 -d /opt/railguard/ws/install/railguard/share/railguard/rviz/railguard.rviz'
-docker compose exec node bash -ic 'ros2 bag play /bags/cloud_with_fake_obj'
+docker compose exec node bash -ic 'ros2 bag play /bags/new_data_val'
 ```
 
 ### Выходные топики ноды
@@ -68,6 +109,8 @@ docker compose exec node bash -ic 'ros2 bag play /bags/cloud_with_fake_obj'
 | -------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `/railguard/centerline`        | `nav_msgs/msg/Path`             | Предсказанная ось пути.                                                                                                |
 | `/railguard/rails`             | `sensor_msgs/msg/PointCloud2`   | Точки рельсов.                                                                                                                 |
+| `/railguard/obstacle_candidates` | `sensor_msgs/msg/PointCloud2` | Кандидаты по одному скану (до подтверждения одометрией).                                                  |
+| `/railguard/odometry`          | `nav_msgs/msg/Odometry`         | Позы KISS-ICP (`frame_id` меняется при каждом сбросе трека).                                              |
 | `/railguard/obstacles`         | `sensor_msgs/msg/PointCloud2`   | Точки обнаруженных препятствий.                                                                                |
 | `/railguard/obstacle_detected` | `std_msgs/msg/Bool`             | `true`, если препятствие обнаружено.                                                                            |
 | `/railguard/obstacle_distance` | `std_msgs/msg/Float32`          | Расстояние до ближайшего препятствия вдоль пути в метрах;`NaN`, если его нет. |

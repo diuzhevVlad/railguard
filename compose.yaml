@@ -43,6 +43,11 @@ services:
     ipc: host
     environment:
       DISPLAY: ${DISPLAY:-:0}
+      RAILGUARD_BAG: "${RAILGUARD_BAG:-}"                       # recording directory name -> GT odometry preset (speed, seed interval), same table as the web app
+      RAILGUARD_INITIAL_SPEED: "${RAILGUARD_INITIAL_SPEED:-}"   # KISS-ICP initial speed, m/s, for recordings without a preset; one of the two is required
+      RAILGUARD_INPUT_TOPIC: "${RAILGUARD_INPUT_TOPIC:-}"       # PointCloud2 topic (empty = YAML value)
+      RAILGUARD_ODOMETRY: "${RAILGUARD_ODOMETRY:-true}"          # false = no KISS-ICP, single-scan detections (initial speed not needed)
+      RAILPATH_ROWS: "${RAILPATH_ROWS:-200}"                    # must match the refiner in weights/ (200 or 400)
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ./data:/bags:ro

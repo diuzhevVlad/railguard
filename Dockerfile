@@ -17,6 +17,8 @@ RUN pip3 install --no-cache-dir "kiss-icp>=1.3,<2" "typer[all]>=0.6,<0.10"
 
 # model code, weights, ROS package
 COPY railpath /opt/railguard/railpath
+# GT odometry presets and scan input shared with the web app (obstacle_app/gt_odometry.py, cloud.py: numpy only)
+COPY obstacle_app/__init__.py obstacle_app/cloud.py obstacle_app/gt_odometry.py /opt/railguard/obstacle_app/
 COPY weights /opt/railguard/weights
 COPY railguard /opt/railguard/ws/src/railguard
 RUN . /opt/ros/humble/setup.sh && cd /opt/railguard/ws && colcon build --event-handlers console_direct- \

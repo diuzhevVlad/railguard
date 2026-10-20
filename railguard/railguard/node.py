@@ -1,11 +1,15 @@
 """RailGuard node: scan in; track, rails, and filtered obstacle detections out."""
 
+import threading
+
 import numpy as np
 from scipy.spatial.transform import Rotation
 
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
@@ -44,13 +48,21 @@ class RailGuardNode(Node):
             settings[name] = self.declare_parameter('tracking_' + name, settings[name]).value
         self.confirmation = StreamingConfirmation(settings)
         self.odom_epoch = None
+        # use_odometry=false: single-scan mode. No pose join, no waiting: each scan is confirmed by the immediate rule only
+        # (large groups), exactly what the odometry mode falls back to when a pose is missing.
+        self.use_odometry = self.declare_parameter('use_odometry', True).value
         self.pose_sync = PoseSynchronizer(self.on_aligned, self.reset_tracking,
             max_pending=self.declare_parameter('odometry_queue_size', 10).value,
             timeout_s=self.declare_parameter('odometry_wait_s', .5).value)
-        self.create_timer(.02, self.pose_sync.flush)
+        # Inference blocks its callback for ~0.2 s per scan. Poses are received in their own callback group so that the
+        # executor (two threads, see main) keeps taking them meanwhile; otherwise the pose queue lags behind the scans and
+        # no scan ever meets its own pose. The synchroniser itself is not thread-safe, hence the lock.
+        self.sync_lock = threading.Lock()
+        self.pose_group = MutuallyExclusiveCallbackGroup()
+        self.create_timer(.02, self.flush_poses, callback_group=self.pose_group)
         odometry_topic = self.declare_parameter('odometry_topic', '/railguard/odometry').value
         self.create_subscription(Odometry, odometry_topic, self.on_odometry,
-            QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
+            QoSProfile(depth=50, reliability=ReliabilityPolicy.BEST_EFFORT), callback_group=self.pose_group)
         self.pub_candidates = self.create_publisher(PointCloud2, '/railguard/obstacle_candidates', 1)
         self.pub_obstacles = self.create_publisher(PointCloud2, '/railguard/obstacles', 1)
         self.pub_detected = self.create_publisher(Bool, '/railguard/obstacle_detected', 1)
@@ -58,7 +70,7 @@ class RailGuardNode(Node):
         self.pub_nearest = self.create_publisher(Marker, '/railguard/nearest_obstacle', 1)
         # depth 1: while a scan is processed only the newest one waits, so the node never falls behind the sensor
         self.create_subscription(PointCloud2, topic, self.on_cloud, QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
-        self.get_logger().info(f'listening on {topic}')
+        self.get_logger().info(f'listening on {topic}' + ('' if self.use_odometry else ' (single-scan mode, no odometry)'))
 
     def on_cloud(self, msg):
         xyz, intensity, ring, valid = unpack(msg)
@@ -78,7 +90,15 @@ class RailGuardNode(Node):
                 path.poses.append(pose)
         self.pub_path.publish(path)
         self.pub_rails.publish(point_cloud2.create_cloud_xyz32(msg.header, out['rails']))
-        self.pose_sync.add_cloud(stamp, msg.header.frame_id, (msg.header, candidate))
+        if not self.use_odometry:
+            self.publish_detection(msg.header, confirm_detection(candidate, [(0, stamp, candidate.points, np.eye(4))], self.confirmation.settings))
+            return
+        with self.sync_lock:
+            self.pose_sync.add_cloud(stamp, msg.header.frame_id, (msg.header, candidate))
+
+    def flush_poses(self):
+        with self.sync_lock:
+            self.pose_sync.flush()
 
     def reset_tracking(self):
         self.confirmation.reset()
@@ -98,7 +118,8 @@ class RailGuardNode(Node):
             self.get_logger().warning(f'Ignoring invalid odometry: {exc}')
             return
         stamp = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
-        self.pose_sync.add_pose(stamp, msg.child_frame_id, (msg.header.frame_id, matrix))
+        with self.sync_lock:
+            self.pose_sync.add_pose(stamp, msg.child_frame_id, (msg.header.frame_id, matrix))
 
     def on_aligned(self, stamp, value, odometry):
         header, candidate = value
@@ -140,8 +161,10 @@ class RailGuardNode(Node):
 def main():
     rclpy.init()
     node = RailGuardNode()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
