@@ -143,7 +143,13 @@ def test_web_seeking_and_normal_viewer_are_independent(tmp_path,monkeypatch):
         assert info['initial_speed_m_s']==3  # Simulation settings remain separate.
         info=client.get('/api/info',params={'bag_id':'source/bag'}).json()
         assert not info['detection_speed_fixed']
-        job=client.post('/api/detections',json={'bag_id':'source/bag','topic':'/lidar_points'}).json()
+        assert info['detection_initial_speed_m_s'] is None
+        request={'bag_id':'source/bag','topic':'/lidar_points'}
+        for extra in ({}, {'initial_speed_m_s':None}):
+            response=client.post('/api/detections',json={**request,**extra})
+            assert response.status_code==400
+            assert 'Set the detection initial speed' in response.json()['detail']
+        job=client.post('/api/detections',json={**request,'initial_speed_m_s':0}).json()
         for _ in range(100):
             job=client.get('/api/detections/'+job['id']).json()
             if job['state'] in ('done','failed'):break

@@ -235,8 +235,10 @@ class LearnedDetectionManager:
         for runtime in runtimes:
             runtime.close()
 
-    def start(self,bag_id,bag,topic,train_width_m=2.1,train_height_m=3.0,max_forward_m=150.,initial_speed_m_s=0.):
+    def start(self,bag_id,bag,topic,train_width_m=2.1,train_height_m=3.0,max_forward_m=150.,initial_speed_m_s=None):
         initial_speed_m_s=detection_initial_speed(bag, initial_speed_m_s)
+        if initial_speed_m_s is None:
+            raise ValueError("Set the detection initial speed for this bag before starting detection (0 m/s is allowed).")
         fingerprint=source_fingerprint(bag)
         with self.lock:
             for job in self.jobs.values():

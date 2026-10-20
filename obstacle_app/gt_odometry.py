@@ -36,9 +36,9 @@ def gt_odometry_preset(bag):
     return GT_ODOMETRY_PRESETS.get(name)
 
 
-def detection_initial_speed(bag, fallback=0.):
+def detection_initial_speed(bag, fallback=None):
     preset = gt_odometry_preset(bag)
-    return preset[0] if preset is not None else float(fallback)
+    return preset[0] if preset is not None else (float(fallback) if fallback is not None else None)
 
 
 def odometry_input(msg):

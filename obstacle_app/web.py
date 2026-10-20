@@ -382,7 +382,7 @@ def create_app(
             path = resolve_bag(bag_id, data_root, output_root)
             with AnyReader([path], default_typestore=TYPESTORE) as reader:
                 return {"bag_id": bag_id, "duration_seconds": reader.duration / 1e9, "initial_speed_m_s": source_initial_speed(path),
-                        "detection_initial_speed_m_s": detection_initial_speed(path, source_initial_speed(path)),
+                        "detection_initial_speed_m_s": detection_initial_speed(path),
                         "detection_speed_fixed": gt_odometry_preset(path) is not None,
                         "topics": [{"name": c.topic, "type": c.msgtype, "messages": c.msgcount,
                                     "model_range_m": model_range_for_topic(c.topic),
@@ -455,8 +455,7 @@ def create_app(
                 if not any(c.topic == request.topic and c.msgtype == "sensor_msgs/msg/PointCloud2"
                            for c in reader.connections):
                     raise ValueError("Select a PointCloud2 topic")
-            speed = request.initial_speed_m_s if request.initial_speed_m_s is not None else source_initial_speed(bag)
-            job = learned_manager.start(request.bag_id, bag, request.topic, request.train_width_m, request.train_height_m, request.max_forward_m, speed)
+            job = learned_manager.start(request.bag_id, bag, request.topic, request.train_width_m, request.train_height_m, request.max_forward_m, request.initial_speed_m_s)
             return {**asdict(job), "odometry": learned_manager.odometry_status(job)}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

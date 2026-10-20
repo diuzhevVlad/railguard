@@ -19,7 +19,7 @@
       <section id="detection-parameters">
         <div class="section-title"><h2>Detection</h2></div>
         <p class="hint" id="detection-model">Model selected automatically from the LiDAR topic</p>
-        <label>Detection initial speed · m/s<input id="detection-speed" type="number" min="0" step="any" value="0" required></label>
+        <label>Detection initial speed · m/s<input id="detection-speed" type="number" min="0" step="any" placeholder="Required for this bag" required></label>
         <div id="detection-speed-note" class="hint"></div>
         <label>Train width · m<input id="train-width" type="number" min="0.1" max="20" step="any" value="2.1" required></label>
         <label>Train height above track · m<input id="train-height" type="number" min="0.1" max="20" step="any" value="3" required></label>
@@ -87,6 +87,6 @@
   <script src="/mesh-controls.js?v=1"></script>
 <script src="/cloud-renderer.js?v=tracking-1"></script>
 <script src="/map-editor.js?v=stable-viewer-2"></script>
-  <script src="/app.js?v=gt-odometry-1"></script>
+  <script src="/app.js?v=required-speed-1"></script>
 </body>
 </html>

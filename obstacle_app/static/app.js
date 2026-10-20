@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const ui = {bag:$('bag'),topic:$('topic'),seek:$('seek'),seekPosition:$('seek-position'),seekEnd:$('seek-end'),notice:$('notice'),status:$('frame-status'),time:$('time-display')};
-let detectionParameters={initial_speed_m_s:0,train_width_m:2.1,train_height_m:3,max_forward_m:150};
+let detectionParameters={initial_speed_m_s:null,train_width_m:2.1,train_height_m:3,max_forward_m:150};
 let simulationParameters={initial_speed_m_s:0};
 let topicModels={};
 function updateAutomaticModel(){
@@ -131,10 +131,10 @@ async function loadBag(){
   try{
     const info=await api('/api/info?bag_id='+encodeURIComponent(bagId));
     if(loadVersion!==bagLoadVersion)return;
-    detectionParameters.initial_speed_m_s=info.detection_initial_speed_m_s??info.initial_speed_m_s??0;$('detection-speed').value=detectionParameters.initial_speed_m_s;
+    detectionParameters.initial_speed_m_s=info.detection_initial_speed_m_s??null;$('detection-speed').value=detectionParameters.initial_speed_m_s??'';
     $('detection-speed').readOnly=Boolean(info.detection_speed_fixed);
     $('detection-speed').title=info.detection_speed_fixed?'Fixed GT-generation odometry preset for this recording':'Initial KISS-ICP speed for this recording';
-    $('detection-speed-note').textContent=info.detection_speed_fixed?'Fixed from the GT-generation preset.':'No GT preset: set the initial speed for this recording.';
+    $('detection-speed-note').textContent=info.detection_speed_fixed?'Fixed from the GT-generation preset.':'Enter an initial speed before detection. Use 0 m/s if the train starts stationary.';
     simulationParameters.initial_speed_m_s=info.initial_speed_m_s??0;$('initial-speed').value=simulationParameters.initial_speed_m_s;
     $('simulation-parameter-status').textContent=`Active initial speed · ${simulationParameters.initial_speed_m_s} m/s`;
     topicModels=Object.fromEntries(info.topics.map(topic=>[topic.name,topic]));
@@ -319,7 +319,12 @@ async function setDetectionVisible(visible){
 
 async function detect(){
   if(!bagReady)return;
+  if(!detectionVisible&&!$('detection-speed').reportValidity()){
+    notice('Set the detection initial speed before starting detection. 0 m/s is allowed.','error');
+    $('detection-speed').focus();return;
+  }
   if(activeDetectionId){try{await setDetectionVisible(!detectionVisible);}catch(error){notice(error.message,'error');}return;}
+  detectionParameters.initial_speed_m_s=Number($('detection-speed').value);
   const bagId=ui.bag.value,topic=ui.topic.value,generation=detectionGeneration;
   if(!bagId||!topic)return;
   $('detect').disabled=true;$('detect').textContent='Loading model…';$('detection-job').hidden=false;$('detection-progress-fill').style.width='0%';$('detection-job-text').textContent='Loading RailGuard weights and refiner…';

@@ -22,6 +22,8 @@ def test_fixed_speeds_including_zero_and_export_provenance(tmp_path):
     for name, speed in expected.items():
         assert detection_initial_speed(tmp_path/name, 99) == speed
     assert detection_initial_speed(tmp_path/"unknown", 7) == 7
+    assert detection_initial_speed(tmp_path/"unknown") is None
+    assert detection_initial_speed(tmp_path/"unknown", 0) == 0
     assert gt_odometry_preset(tmp_path/"unknown") is None
     exported = tmp_path/"export"
     exported.mkdir()
@@ -98,4 +100,11 @@ def test_manager_cannot_override_known_gt_speed(tmp_path, monkeypatch):
     second = manager.start("source/cloud_with_fake_obj", bag, "/lidar_points", initial_speed_m_s=15)
     assert first is second
     assert first.initial_speed_m_s == 0
+    assert manager.start("source/cloud_with_fake_obj", bag, "/lidar_points") is first
+    unknown = tmp_path/"unknown"
+    unknown.mkdir()
+    with pytest.raises(ValueError, match="Set the detection initial speed"):
+        manager.start("source/unknown", unknown, "/lidar_points")
+    explicit_zero = manager.start("source/unknown", unknown, "/lidar_points", initial_speed_m_s=0)
+    assert explicit_zero.initial_speed_m_s == 0
     manager.close()
