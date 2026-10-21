@@ -29,7 +29,7 @@ railguard_node:
     count_unique_xyz: true                          # duplicate XYZ records do not add cluster support
     # Odometry aligns candidate groups; neural inference still uses one scan.
     odometry_wait_s: 0.5                            # missing poses break temporal support
-    odometry_queue_size: 100                         # bounded pending scan/pose joins
+    odometry_queue_size: 50                         # bounded pending scan/pose joins
     tracking_match_distance_m: 1.0
     tracking_window_scans: 5
     tracking_minimum_hits: 4
