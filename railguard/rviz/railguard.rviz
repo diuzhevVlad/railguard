@@ -14,7 +14,7 @@ Visualization Manager:
       Name: LiDAR
       Enabled: true
       Topic:
-        Value: /railguard/detection_points
+        Value: /lidar_points
         Reliability Policy: Best Effort
         Depth: 1
       Size (m): 0.03

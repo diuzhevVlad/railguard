@@ -55,3 +55,4 @@ services:
       - ./railguard/config:/opt/railguard/config:ro
     command: ["ros2", "launch", "railguard", "railguard.launch.py", "config:=/opt/railguard/config/railguard.yaml"]
     restart: unless-stopped
+    # command: ["bash"]

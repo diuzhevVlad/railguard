@@ -1,4 +1,6 @@
 """Streaming KISS-ICP using the same scan input and registration settings as the app."""
+import queue
+import threading
 import uuid
 import math
 
@@ -37,16 +39,37 @@ class KissIcpNode(Node):
         self.get_logger().info(f'odometry: initial speed {speed} m/s' + (f' (seed interval {seed_dt} s)' ) + (' with deskew' if self.deskew else ''))
         self.sensor_frame = None
         self.epoch = None
-        qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE)
-        self.publisher = self.create_publisher(Odometry, output, qos)
-        processed_topic = self.declare_parameter('processed_cloud_topic', '/railguard/registered_points').value
-        if processed_topic == topic:
-            raise ValueError('processed_cloud_topic must differ from input_topic')
-        self.cloud_publisher = self.create_publisher(PointCloud2, processed_topic,
-            QoSProfile(depth=20, reliability=ReliabilityPolicy.RELIABLE))
-        self.create_subscription(PointCloud2, topic, self.on_cloud,
-                                 QoSProfile(depth=20, reliability=ReliabilityPolicy.RELIABLE))
+        # Poses only. The scan itself is never re-published: a 7 MB cloud is ~110 UDP datagrams, and forwarding it on a
+        # RELIABLE topic (retransmissions, serialisation in Python) saturated a core and throttled the bag player to 6 Hz.
+        # The detection node subscribes to the lidar topic directly and joins scans to these poses by timestamp.
+        self.publisher = self.create_publisher(Odometry, output, QoSProfile(depth=50, reliability=ReliabilityPolicy.BEST_EFFORT))
+        # Registration takes ~45 ms per scan. If it ran inside the subscription callback, the executor would take the
+        # next sample only afterwards, and under load samples get overwritten in the transport before they are taken
+        # (3-7 % of scans lost); a single dropped scan at 15-20 m/s breaks the track. So the callback only queues the
+        # scan (cheap) and a worker thread registers them in order; the queue absorbs bursts and the log reports overflow.
+        self.pending = queue.Queue(maxsize=self.declare_parameter('scan_queue_size', 100).value)
+        self.dropped = 0; self.max_pending = 0
+        threading.Thread(target=self.worker, daemon=True).start()
+        # RELIABLE: the registration needs every scan (one missing scan at 15-20 m/s breaks the track) and the callback is
+        # now instant, so the publisher's retransmissions cost nothing. ros2 bag play and lidar drivers publish reliable.
+        self.create_subscription(PointCloud2, topic, self.enqueue,
+                                 QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE))
         self.get_logger().info(f'KISS-ICP: {topic} -> {output}')
+
+    def enqueue(self, msg):
+        try:
+            self.pending.put_nowait(msg); self.max_pending = max(self.max_pending, self.pending.qsize())
+        except queue.Full:
+            self.dropped += 1
+            self.get_logger().warning(f'scan queue full: {self.dropped} scans dropped so far (registration slower than the sensor)', throttle_duration_sec=5.)
+
+    def worker(self):
+        while rclpy.ok():
+            try:
+                msg = self.pending.get(timeout=.5)
+            except queue.Empty:
+                continue
+            self.on_cloud(msg)
 
     def on_cloud(self, msg):
         stamp = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
@@ -73,8 +96,8 @@ class KissIcpNode(Node):
             orientation.x, orientation.y, orientation.z, orientation.w = map(
                 float, Rotation.from_matrix(matrix[:3, :3]).as_quat())
             self.publisher.publish(odom)
-            # Forward the original scan, not a deskewed/decimated model input.
-            self.cloud_publisher.publish(msg)
+            if self.odometry.count % 300 == 0:
+                self.get_logger().info(f'{self.odometry.count} scans registered, queue high-water mark {self.max_pending}, dropped {self.dropped}')
         except Exception as exc:
             self.odometry.reset()
             self.epoch = None
