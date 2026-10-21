@@ -69,7 +69,7 @@ class RailGuardNode(Node):
         self.create_timer(.02, self.flush_poses, callback_group=self.pose_group)
         odometry_topic = self.declare_parameter('odometry_topic', '/railguard/odometry').value
         self.create_subscription(Odometry, odometry_topic, self.on_odometry,
-            QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE), callback_group=self.pose_group)
+            QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE), callback_group=self.pose_group)
         self.pub_detection_cloud = self.create_publisher(PointCloud2, '/railguard/detection_points',
             QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.pub_candidates = self.create_publisher(PointCloud2, '/railguard/obstacle_candidates', 1)
@@ -83,7 +83,7 @@ class RailGuardNode(Node):
         # Preserve consecutive scans, as the app does. Pace bag playback when
         # processing cannot keep up; latest-only inference changes confirmation.
         self.create_subscription(PointCloud2, topic, self.on_cloud,
-            QoSProfile(depth=20, reliability=ReliabilityPolicy.RELIABLE))
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE))
         self.get_logger().info(f'listening on {topic}' + ('' if self.use_odometry else ' (single-scan mode, no odometry)'))
 
     def on_cloud(self, msg):

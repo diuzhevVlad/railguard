@@ -3,7 +3,7 @@ import numpy as np
 
 
 ODOMETRY_VERSION = 1
-
+from kiss_icp.mapping import get_voxel_hash_map
 
 class TrackingOdometry:
     def __init__(self, initial_speed_m_s=0., max_gap_s=2., factory=None, *,
@@ -27,6 +27,7 @@ class TrackingOdometry:
         self.engine = None
         self.previous = None
         self.count = 0
+        self.blind = False
 
     def reset(self):
         if self.factory is None:
@@ -47,6 +48,22 @@ class TrackingOdometry:
         if reset:
             self.reset()
         xyz = np.asarray(points)
+        cnt_points_5m = np.sum(xyz[:, 1] < -5)
+        criterion = cnt_points_5m < points.shape[0]*0.02
+
+        if not self.blind and criterion:
+            self.blind = True 
+            self.engine.local_map = get_voxel_hash_map(self.engine.config)
+        
+        if self.blind and not criterion:
+            self.blind =False 
+
+        if  self.blind:
+            pose = self.engine.last_pose.copy() @ self.engine.last_delta
+            self.engine.last_pose = pose
+            return pose, reset
+
+
         times = np.asarray(point_timestamps, dtype=np.float64) if point_timestamps is not None else np.empty(0)
         if times.size and times.shape != (len(xyz),):
             raise ValueError("Point timestamps must match XYZ")

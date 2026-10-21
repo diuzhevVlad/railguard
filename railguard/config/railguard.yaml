@@ -9,9 +9,6 @@
 railguard_odometry:
   ros__parameters:
     # Same registration settings as the app. Speed is mandatory in the launch command.
-    point_stride: 1
-    deskew: true
-    min_distance_m: 0.0
     max_num_threads: 2
     odometry_frame: railguard_odom
 
