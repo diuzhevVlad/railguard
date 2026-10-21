@@ -15,11 +15,14 @@ def main():
     parser.add_argument('bag')
     parser.add_argument('--topic', default='/lidar_points')
     parser.add_argument('--timeout', type=float, default=60.)
-    parser.add_argument('--in-flight', type=int, default=3, help='maximum outstanding scans (1..10; 1 is sequential)')
     parser.add_argument('--max-scans', type=int, default=0, help='stop after this many scans; 0 plays the whole bag')
     args = parser.parse_args()
-    if not 1 <= args.in_flight <= 10 or args.max_scans < 0 or args.timeout <= 0:
-        parser.error('in-flight must be 1..10; max-scans >= 0; timeout > 0')
+    if args.max_scans < 0 or args.timeout <= 0:
+        parser.error('max-scans >= 0; timeout > 0')
+    # Strictly one scan outstanding. The detection node keeps only the newest unprocessed scan (best-effort, depth 1)
+    # and acknowledges a scan before its callback ends, so a second scan sent on that acknowledgement can overwrite a
+    # waiting one in the node's buffer and never be acknowledged (seen once per ~600 scans with two in flight).
+    in_flight = 1
     rclpy.init(args=[])
     node = rclpy.create_node('railguard_paced_player')
     qos = QoSProfile(depth=20, reliability=ReliabilityPolicy.RELIABLE)
@@ -55,7 +58,7 @@ def main():
             if pending and time.monotonic() - min(pending.values()) > args.timeout:
                 raise RuntimeError('Missing detection acknowledgement; stopping without skipping scans')
         while reader.has_next() and (not args.max_scans or count < args.max_scans):
-            while len(pending) >= args.in_flight:
+            while len(pending) >= in_flight:
                 rclpy.spin_once(node, timeout_sec=.01)
                 check_timeout()
             _, data, _ = reader.read_next()

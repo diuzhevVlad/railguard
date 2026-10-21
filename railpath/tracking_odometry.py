@@ -2,8 +2,10 @@
 import numpy as np
 
 
-ODOMETRY_VERSION = 1
 from kiss_icp.mapping import get_voxel_hash_map
+
+ODOMETRY_VERSION = 1
+
 
 class TrackingOdometry:
     def __init__(self, initial_speed_m_s=0., max_gap_s=2., factory=None, *,
@@ -48,22 +50,19 @@ class TrackingOdometry:
         if reset:
             self.reset()
         xyz = np.asarray(points)
-        cnt_points_5m = np.sum(xyz[:, 1] < -5)
-        criterion = cnt_points_5m < points.shape[0]*0.02
-
-        if not self.blind and criterion:
-            self.blind = True 
+        # Blind spell: fewer than 2 % of the returns lie more than 5 m ahead (forward = -y), e.g. an obstacle fills the
+        # view. Registration against the old map would lock onto the obstacle, so the map is dropped and the pose is
+        # extrapolated with the last motion; the map is rebuilt from the first scan that sees ahead again. (KISS-ICP only.)
+        blind = (self.factory is None and xyz.ndim == 2 and len(xyz) > 0
+                 and np.count_nonzero(xyz[:, 1] < -5) < .02 * len(xyz))
+        if blind and not self.blind:
             self.engine.local_map = get_voxel_hash_map(self.engine.config)
-        
-        if self.blind and not criterion:
-            self.blind =False 
-
-        if  self.blind:
-            pose = self.engine.last_pose.copy() @ self.engine.last_delta
+        self.blind = blind
+        if blind:
+            pose = self.engine.last_pose @ self.engine.last_delta
             self.engine.last_pose = pose
-            return pose, reset
-
-
+            self.previous, self.count = stamp_ns, self.count + 1   # keeps the gap check and the epoch intact
+            return pose.copy(), reset
         times = np.asarray(point_timestamps, dtype=np.float64) if point_timestamps is not None else np.empty(0)
         if times.size and times.shape != (len(xyz),):
             raise ValueError("Point timestamps must match XYZ")

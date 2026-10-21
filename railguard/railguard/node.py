@@ -10,14 +10,15 @@ from scipy.spatial.transform import Rotation
 import rclpy
 from geometry_msgs.msg import PoseStamped, Point
 from nav_msgs.msg import Path, Odometry
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
-from std_msgs.msg import Bool, Float32
+from std_msgs.msg import Bool, Float32, Header
 from visualization_msgs.msg import Marker
+
+from sensor_msgs.msg import PointField
 
 from railpath import RailPath
 from railpath.bag_io import unpack
@@ -26,6 +27,18 @@ from railpath.tracked_detection import CANDIDATE_CONFIG, detect_candidates, Stre
 from railpath.pose_sync import PoseSynchronizer
 from railpath.tracked_detection import confirm_detection
 from railpath.obstacle_tracking import TRACKING_SETTINGS
+
+
+XYZ_FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate('xyz')]
+
+
+def xyz_cloud(header, points):
+    """PointCloud2 from an (N,3) array in one memcpy; sensor_msgs_py.create_cloud_xyz32 loops over points in Python."""
+    pts = np.ascontiguousarray(np.asarray(points, dtype=np.float32).reshape(-1, 3))
+    msg = PointCloud2(header=header, height=1, width=len(pts), fields=XYZ_FIELDS, is_bigendian=False,
+                      point_step=12, row_step=12 * len(pts), is_dense=True)
+    msg.data = pts.tobytes()
+    return msg
 
 
 class RailGuardNode(Node):
@@ -61,56 +74,62 @@ class RailGuardNode(Node):
         self.pose_sync = PoseSynchronizer(self.on_aligned, self.reset_tracking,
             max_pending=self.declare_parameter('odometry_queue_size', 100).value,
             timeout_s=self.declare_parameter('odometry_wait_s', .5).value)
-        # Inference blocks its callback for ~0.2 s per scan. Poses are received in their own callback group so that the
-        # executor (two threads, see main) keeps taking them meanwhile; otherwise the pose queue lags behind the scans and
-        # no scan ever meets its own pose. The synchroniser itself is not thread-safe, hence the lock.
+        # Inference blocks its callback for ~0.15 s per scan, so poses are received by a separate node (PoseListener) spun
+        # by its own executor in a background thread; a multi-threaded executor on this node stalled the scan callback
+        # (GIL contention while the second thread kept waking on the ready scan subscription). The synchroniser is not
+        # thread-safe, hence the lock.
         self.sync_lock = threading.Lock()
-        self.pose_group = MutuallyExclusiveCallbackGroup()
-        self.create_timer(.02, self.flush_poses, callback_group=self.pose_group)
-        odometry_topic = self.declare_parameter('odometry_topic', '/railguard/odometry').value
-        self.create_subscription(Odometry, odometry_topic, self.on_odometry,
-            QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE), callback_group=self.pose_group)
-        self.pub_detection_cloud = self.create_publisher(PointCloud2, '/railguard/detection_points',
-            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self.odometry_topic = self.declare_parameter('odometry_topic', '/railguard/odometry').value
+        # Re-publishing the processed scan (7 MB) costs a core; off by default, RViz shows the lidar topic instead.
+        self.pub_detection_cloud = (self.create_publisher(PointCloud2, '/railguard/detection_points', QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+                                    if self.declare_parameter('publish_detection_cloud', False).value else None)
         self.pub_candidates = self.create_publisher(PointCloud2, '/railguard/obstacle_candidates', 1)
         self.pub_obstacles = self.create_publisher(PointCloud2, '/railguard/obstacles', 1)
         self.pub_detected = self.create_publisher(Bool, '/railguard/obstacle_detected', 1)
         self.pub_distance = self.create_publisher(Float32, '/railguard/obstacle_distance', 1)
         self.pub_nearest = self.create_publisher(Marker, '/railguard/nearest_obstacle', 1)
-        # Consume only scans for which KISS-ICP has published a matching pose.
-        if self.use_odometry:
-            topic = self.declare_parameter('processed_cloud_topic', '/railguard/registered_points').value
-        # Preserve consecutive scans, as the app does. Pace bag playback when
-        # processing cannot keep up; latest-only inference changes confirmation.
+        # Obstacle points in the odometry frame (header.frame_id = the KISS-ICP epoch), consistent across scans.
+        self.pub_obstacles_world = self.create_publisher(PointCloud2, '/railguard/obstacles_world', 1)
+        # require_odometry=true: a scan whose pose never arrives (odometry_wait_s) is not reported at all, so every published
+        # detection has a pose of the same stamp and can be placed in the world frame. false = fall back to the single-scan rule.
+        self.require_odometry = self.declare_parameter('require_odometry', False).value   # the shipped config sets true
+        # The lidar topic directly, best effort, newest scan only: the node never falls behind the sensor. Scans are joined
+        # to KISS-ICP poses by timestamp (PoseSynchronizer). For bag evaluation with every scan, use the paced player
+        # (railguard_play) instead of a RELIABLE queue, which throttles the publisher.
         self.create_subscription(PointCloud2, topic, self.on_cloud,
-            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE))
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.get_logger().info(f'listening on {topic}' + ('' if self.use_odometry else ' (single-scan mode, no odometry)'))
 
     def on_cloud(self, msg):
         xyz, intensity, ring, valid = unpack(msg)
         stamp = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
-        self.model.sparse = None
         model_valid = valid & (np.einsum('ij,ij->i', xyz, xyz) > .25)
         out = self.model.predict(xyz[model_valid], ring=ring[model_valid] if ring is not None else None)
-        candidate = detect_obstacles(xyz[valid], out['centerline'], out['rails'],
+        # Candidates can only lie inside the train envelope around the predicted line, so the nearest-centre search gets
+        # a broad sensor-frame window instead of the whole scan (half the points on a Pandar128 are behind or far aside).
+        roi = valid & (xyz[:, 1] < 0) & (-xyz[:, 1] <= self.max_forward_m + 5.) & (np.abs(xyz[:, 0]) < 40.)
+        candidate = detect_obstacles(xyz[roi], out['centerline'], out['rails'],
                                      self.obstacle_config, self.max_forward_m,
                                      candidate_detector=detect_candidates)
-        self.pub_candidates.publish(point_cloud2.create_cloud_xyz32(msg.header, candidate.points))
-        centerline=candidate.prediction.center if candidate.prediction is not None else out['centerline']
+        self.pub_candidates.publish(xyz_cloud(msg.header, candidate.points))
+        centerline = candidate.prediction.center if candidate.prediction is not None else out['centerline']
+        centerline = centerline[np.isfinite(centerline).all(axis=1)]
+        if len(centerline) > 400:                                  # the refined line is sampled every 0.25 m; 1 m is enough for the Path
+            centerline = centerline[::4]
         path = Path(header=msg.header)
         for x, y, z in centerline:
-            if x == x:                                             # skip NaN (beyond the supported range without the refiner)
-                pose = PoseStamped(header=msg.header)
-                pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = float(x), float(y), float(z)
-                path.poses.append(pose)
+            pose = PoseStamped(header=msg.header)
+            pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = float(x), float(y), float(z)
+            path.poses.append(pose)
         self.pub_path.publish(path)
-        self.pub_rails.publish(point_cloud2.create_cloud_xyz32(msg.header, out['rails']))
+        self.pub_rails.publish(xyz_cloud(msg.header, out['rails']))
         if not self.use_odometry:
-            self.pub_detection_cloud.publish(msg)
+            if self.pub_detection_cloud is not None:
+                self.pub_detection_cloud.publish(msg)
             self.publish_detection(msg.header, confirm_detection(candidate, [(0, stamp, candidate.points, np.eye(4))], self.confirmation.settings))
             return
         with self.sync_lock:
-            self.pose_sync.add_cloud(stamp, msg.header.frame_id, (msg, candidate))
+            self.pose_sync.add_cloud(stamp, msg.header.frame_id, (msg if self.pub_detection_cloud is not None else msg.header, candidate))
 
     def flush_poses(self):
         with self.sync_lock:
@@ -139,22 +158,33 @@ class RailGuardNode(Node):
 
     def on_aligned(self, stamp, value, odometry):
         msg, candidate = value
-        header = msg.header
+        header = msg.header if isinstance(msg, PointCloud2) else msg
         if odometry is None:
             # Do not guess a transform. Large current groups still satisfy the
             # immediate rule; small groups cannot acquire temporal confirmation.
             self.reset_tracking()
+            if self.require_odometry:
+                self.get_logger().warning('No matching odometry: scan not reported', throttle_duration_sec=5.)
+                return
             detection = confirm_detection(candidate, [(0, stamp, candidate.points, np.eye(4))],
                                           self.confirmation.settings)
             self.get_logger().warning('No matching odometry: temporal confirmation reset', throttle_duration_sec=5.)
+            world = None
         else:
             epoch, matrix = odometry
             if epoch != self.odom_epoch:
                 self.confirmation.reset()
                 self.odom_epoch = epoch
             detection = self.confirmation.update(stamp, candidate, matrix)
-        self.pub_detection_cloud.publish(msg)
+            world = (epoch, matrix)
+        if self.pub_detection_cloud is not None and isinstance(msg, PointCloud2):
+            self.pub_detection_cloud.publish(msg)
         self.publish_detection(header, detection)
+        if world is not None:
+            epoch, matrix = world
+            pts = np.asarray(detection.points, dtype=np.float64).reshape(-1, 3)
+            world_header = Header(stamp=header.stamp, frame_id=epoch)
+            self.pub_obstacles_world.publish(xyz_cloud(world_header, pts @ matrix[:3, :3].T + matrix[:3, 3]))
 
     def publish_detection(self, header, detection):
         envelope = Marker()
@@ -170,6 +200,8 @@ class RailGuardNode(Node):
         center = center[np.isfinite(center).all(axis=1)]
         center = center[(-center[:, 1] >= self.obstacle_config.min_forward_m) &
                         (-center[:, 1] <= self.max_forward_m)]
+        if len(center) > 200:
+            center = center[::4]
         if len(center) < 2:
             envelope.action = Marker.DELETE
         else:
@@ -191,7 +223,7 @@ class RailGuardNode(Node):
                                for segment in segments for p in segment]
         self.pub_envelope.publish(envelope)
 
-        self.pub_obstacles.publish(point_cloud2.create_cloud_xyz32(header, detection.points))
+        self.pub_obstacles.publish(xyz_cloud(header, detection.points))
         self.pub_detected.publish(Bool(data=detection.detected))
         self.pub_distance.publish(Float32(data=detection.distance_m if detection.detected else float('nan')))
         nearest = Marker()
@@ -210,16 +242,33 @@ class RailGuardNode(Node):
         self.pub_nearest.publish(nearest)
 
 
+class PoseListener(Node):
+    """Receives KISS-ICP poses for the detection node; runs in its own executor thread so scans never block poses."""
+    def __init__(self, detection):
+        super().__init__('railguard_pose_listener')
+        self.create_subscription(Odometry, detection.odometry_topic, detection.on_odometry,
+                                 QoSProfile(depth=50, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self.create_timer(.02, detection.flush_poses)
+
+
 def main():
     rclpy.init()
     node = RailGuardNode()
-    executor = MultiThreadedExecutor(num_threads=2)
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
+    pose_executor = None
+    if node.use_odometry:
+        listener = PoseListener(node)
+        pose_executor = SingleThreadedExecutor()
+        pose_executor.add_node(listener)
+        threading.Thread(target=pose_executor.spin, daemon=True).start()
     try:
         executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        if pose_executor is not None:
+            pose_executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
 

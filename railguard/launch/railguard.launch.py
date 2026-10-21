@@ -17,13 +17,13 @@ def launch_nodes(context):
     speed = LaunchConfiguration('initial_speed').perform(context)
     bag = LaunchConfiguration('bag').perform(context).strip().strip('/').split('/')[-1]
     odometry = LaunchConfiguration('odometry').perform(context).strip().lower() not in ('0', 'false', 'no', 'off')
-    if not speed or not math.isfinite(float(speed)) or float(speed) < 0:
-        raise RuntimeError('initial_speed:=<m/s> (or RAILGUARD_INITIAL_SPEED) is required; use 0 for a stationary start')
     if not odometry:
         override = {'/**': {'ros__parameters': {'use_odometry': False, **({'input_topic': topic} if topic else {})}}}
         f = tempfile.NamedTemporaryFile('w', suffix='.yaml', prefix='railguard_override_', delete=False)
         yaml.safe_dump(override, f); f.close()
         return [Node(package='railguard', executable='railguard_node', parameters=[config, f.name], output='screen')]
+    if not speed or not math.isfinite(float(speed)) or float(speed) < 0:
+        raise RuntimeError('initial_speed:=<m/s> (or RAILGUARD_INITIAL_SPEED) is required; use 0 for a stationary start')
     # Node-specific sections of the YAML take precedence over wildcard ('/**') overrides whatever the file order, so the
     # overrides are written as node-specific sections of a second parameter file.
     override = {}
